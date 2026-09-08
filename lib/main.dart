@@ -276,16 +276,17 @@ final localRecords = (cachedTasks as List).map((task) {
 }
 
   Future<void> showAddTaskDialog() async {
-    final titleController = TextEditingController();
-    final descriptionController = TextEditingController();
+  final titleController = TextEditingController();
+  final descriptionController = TextEditingController();
 
-    await showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Add Task'),
-          content: SizedBox(
-            width: 400,
+  await showDialog(
+    context: context,
+    builder: (dialogContext) {
+      return AlertDialog(
+        title: const Text('Add Task'),
+        content: SizedBox(
+          width: 400,
+          child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -308,41 +309,53 @@ final localRecords = (cachedTasks as List).map((task) {
               ],
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-              },
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                final title = titleController.text.trim();
-                final description = descriptionController.text.trim();
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              FocusScope.of(dialogContext).unfocus();
+              Navigator.of(dialogContext).pop();
+            },
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final title = titleController.text.trim();
+              final description =
+                  descriptionController.text.trim();
 
-                if (title.isEmpty) {
-                  return;
-                }
+              if (title.isEmpty) {
+                return;
+              }
 
-                await createTask(
-                  title: title,
-                  description: description,
-                );
+              // Remove keyboard focus before closing the dialog.
+              FocusScope.of(dialogContext).unfocus();
 
-                if (context.mounted) {
-                  Navigator.pop(context);
-                }
-              },
-              child: const Text('Add Task'),
-            ),
-          ],
-        );
-      },
-    );
+              // Close the dialog first.
+              Navigator.of(dialogContext).pop();
 
-    titleController.dispose();
-    descriptionController.dispose();
-  }
+              // Then create the task.
+              await createTask(
+                title: title,
+                description: description,
+              );
+            },
+            child: const Text('Add Task'),
+          ),
+        ],
+      );
+    },
+  );
+
+  // Give Android's text input/focus system time to detach
+  // before destroying the controllers.
+  await Future<void>.delayed(
+    const Duration(milliseconds: 100),
+  );
+
+  titleController.dispose();
+  descriptionController.dispose();
+}
 
  Future<void> createTask({
   required String title,
@@ -703,66 +716,6 @@ Future<void> deleteTask(RecordModel task) async {
   }
 }
   int get completedTaskCount {
-    Future<void> deleteTask(RecordModel task) async {
-  final cacheBox = Hive.box('tasks_cache');
-  final pendingBox = Hive.box('pending_changes');
-
-  // Remove the task from the screen immediately.
-  if (mounted) {
-    setState(() {
-      tasks.removeWhere(
-        (item) => item.id == task.id,
-      );
-    });
-  }
-
-  // Remove the task from the local Hive cache.
-  final cachedTasks =
-      List<dynamic>.from(cacheBox.get('tasks') ?? []);
-
-  cachedTasks.removeWhere(
-    (item) => item['id'] == task.id,
-  );
-
-  await cacheBox.put('tasks', cachedTasks);
-
-  // If this task was created offline and has never
-  // reached PocketBase, just remove its pending creation.
-  if (task.id.startsWith('local_')) {
-    await pendingBox.delete(task.id);
-
-    debugPrint(
-      'Offline-created task deleted locally.',
-    );
-
-    return;
-  }
-
-  // Queue the deletion BEFORE contacting PocketBase.
-  await pendingBox.put(
-    task.id,
-    {
-      'type': 'delete',
-      'task_id': task.id,
-    },
-  );
-
-  try {
-    await pb.collection('tasks').delete(task.id);
-
-    // PocketBase successfully deleted it.
-    await pendingBox.delete(task.id);
-
-    debugPrint(
-      'Task deleted from PocketBase successfully.',
-    );
-  } catch (error) {
-    // Leave the delete operation in pending_changes.
-    debugPrint(
-      'Server unavailable. Task deletion waiting to sync.',
-    );
-  }
-}
     return tasks
         .where(
           (task) => task.getBoolValue('is_completed'),
