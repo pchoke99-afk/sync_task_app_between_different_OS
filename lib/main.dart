@@ -1,40 +1,37 @@
+import 'package:confetti/confetti.dart';
 import 'package:flutter/material.dart';
+import 'package:hive_ce_flutter/hive_flutter.dart';
 import 'package:pocketbase/pocketbase.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:hive_ce_flutter/hive_flutter.dart';
+
+const pocketBaseUrl = 'http://100.117.123.116:8090';
+const tasksCollection = 'tasks';
+const usersCollection = 'users';
+const tasksCacheBoxName = 'tasks_cache';
+const pendingChangesBoxName = 'pending_changes';
 
 late final PocketBase pb;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-await Hive.initFlutter();
-
-  await Hive.openBox('tasks_cache');
-  await Hive.openBox('pending_changes');
+  await Hive.initFlutter();
+  await Hive.openBox(tasksCacheBoxName);
+  await Hive.openBox(pendingChangesBoxName);
 
   final prefs = await SharedPreferences.getInstance();
-
   final authStore = AsyncAuthStore(
-    save: (String data) async {
-      await prefs.setString('pb_auth', data);
-    },
     initial: prefs.getString('pb_auth'),
-    clear: () async {
-      await prefs.remove('pb_auth');
-    },
+    save: (data) => prefs.setString('pb_auth', data),
+    clear: () => prefs.remove('pb_auth'),
   );
 
-  pb = PocketBase(
-    'http://100.117.123.116:8090',
-    authStore: authStore,
-  );
-
-  runApp(const MyApp());
+  pb = PocketBase(pocketBaseUrl, authStore: authStore);
+  runApp(const SyncTaskApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class SyncTaskApp extends StatelessWidget {
+  const SyncTaskApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -42,15 +39,358 @@ class MyApp extends StatelessWidget {
       title: 'Sync Task App',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.deepPurple,
-        ),
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
-      home: pb.authStore.isValid
-    ? const TaskScreen()
-    : const LoginScreen(),
+      home: pb.authStore.isValid ? const TaskScreen() : const LoginScreen(),
     );
+  }
+}
+
+enum TaskPriority {
+  high,
+  normal,
+  low;
+
+  String get label {
+    switch (this) {
+      case TaskPriority.high:
+        return 'High priority';
+      case TaskPriority.normal:
+        return 'Normal priority';
+      case TaskPriority.low:
+        return 'Low priority';
+    }
+  }
+
+  int get sortOrder {
+    switch (this) {
+      case TaskPriority.high:
+        return 0;
+      case TaskPriority.normal:
+        return 1;
+      case TaskPriority.low:
+        return 2;
+    }
+  }
+
+  static TaskPriority fromString(String value) {
+    return TaskPriority.values.firstWhere(
+      (priority) => priority.name == value,
+      orElse: () => TaskPriority.normal,
+    );
+  }
+}
+
+class AppTask {
+  const AppTask({
+    required this.id,
+    required this.title,
+    required this.description,
+    required this.priority,
+    required this.isCompleted,
+    required this.completedAt,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String title;
+  final String description;
+  final TaskPriority priority;
+  final bool isCompleted;
+  final String completedAt;
+  final String createdAt;
+
+  bool get isLocal => id.startsWith('local_');
+
+  AppTask copyWith({
+    String? id,
+    String? title,
+    String? description,
+    TaskPriority? priority,
+    bool? isCompleted,
+    String? completedAt,
+    String? createdAt,
+  }) {
+    return AppTask(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      description: description ?? this.description,
+      priority: priority ?? this.priority,
+      isCompleted: isCompleted ?? this.isCompleted,
+      completedAt: completedAt ?? this.completedAt,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
+
+  factory AppTask.fromRecord(RecordModel record) {
+    return AppTask(
+      id: record.id,
+      title: record.getStringValue('title'),
+      description: record.getStringValue('description'),
+      priority: TaskPriority.fromString(record.getStringValue('priority')),
+      isCompleted: record.getBoolValue('is_completed'),
+      completedAt: record.getStringValue('completed_at'),
+      createdAt: record.getStringValue('created'),
+    );
+  }
+
+  factory AppTask.fromMap(Map<String, dynamic> map) {
+    return AppTask(
+      id: map['id']?.toString() ?? '',
+      title: map['title']?.toString() ?? '',
+      description: map['description']?.toString() ?? '',
+      priority: TaskPriority.fromString(
+        map['priority']?.toString() ?? 'normal',
+      ),
+      isCompleted: map['is_completed'] == true,
+      completedAt: map['completed_at']?.toString() ?? '',
+      createdAt: map['created_at']?.toString() ?? '',
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'title': title,
+      'description': description,
+      'priority': priority.name,
+      'is_completed': isCompleted,
+      'completed_at': completedAt,
+      'created_at': createdAt,
+    };
+  }
+
+  Map<String, dynamic> toServerBody(String userId) {
+    return {
+      'title': title,
+      'description': description,
+      'priority': priority.name,
+      'is_completed': isCompleted,
+      'completed_at': completedAt,
+      'user': userId,
+    };
+  }
+}
+
+class TaskRepository {
+  final Box _cacheBox = Hive.box(tasksCacheBoxName);
+  final Box _pendingBox = Hive.box(pendingChangesBoxName);
+
+  String? get _userId => pb.authStore.record?.id;
+
+  Future<List<AppTask>> loadTasks() async {
+    final userId = _userId;
+    if (userId == null) return const [];
+
+    try {
+      final records = await pb.collection(tasksCollection).getFullList(
+            filter: 'user = "$userId"',
+            sort: '-created',
+          );
+
+      final tasks = records.map(AppTask.fromRecord).toList();
+      await _saveCache(tasks);
+      return tasks;
+    } catch (error) {
+      debugPrint('Loading cached tasks because PocketBase is unavailable: $error');
+      return _loadCache();
+    }
+  }
+
+  Future<AppTask> createTask({
+    required String title,
+    required String description,
+    required TaskPriority priority,
+  }) async {
+    final userId = _userId;
+    if (userId == null) throw StateError('No authenticated user.');
+
+    final tempId = 'local_${DateTime.now().microsecondsSinceEpoch}';
+    final task = AppTask(
+      id: tempId,
+      title: title,
+      description: description,
+      priority: priority,
+      isCompleted: false,
+      completedAt: '',
+      createdAt: DateTime.now().toUtc().toIso8601String(),
+    );
+
+    await _upsertCacheTask(task);
+    await _pendingBox.put(tempId, {
+      'type': 'create',
+      'temp_id': tempId,
+      ...task.toServerBody(userId),
+    });
+
+    try {
+      final record = await pb.collection(tasksCollection).create(
+            body: task.toServerBody(userId),
+          );
+
+      await _pendingBox.delete(tempId);
+      await _removeCacheTask(tempId);
+
+      final serverTask = AppTask.fromRecord(record);
+      await _upsertCacheTask(serverTask);
+      return serverTask;
+    } catch (error) {
+      debugPrint('New task saved locally and waiting to sync: $error');
+      return task;
+    }
+  }
+
+  Future<void> updateTask(AppTask task) async {
+    final userId = _userId;
+    if (userId == null) throw StateError('No authenticated user.');
+
+    await _upsertCacheTask(task);
+
+    if (task.isLocal) {
+      final pending = _mapFromDynamic(_pendingBox.get(task.id));
+      if (pending != null) {
+        pending
+          ..['title'] = task.title
+          ..['description'] = task.description
+          ..['priority'] = task.priority.name
+          ..['is_completed'] = task.isCompleted
+          ..['completed_at'] = task.completedAt;
+        await _pendingBox.put(task.id, pending);
+      }
+      return;
+    }
+
+    final body = {
+      'title': task.title,
+      'description': task.description,
+      'priority': task.priority.name,
+      'is_completed': task.isCompleted,
+      'completed_at': task.completedAt,
+    };
+
+    try {
+      await pb.collection(tasksCollection).update(task.id, body: body);
+      await _pendingBox.delete(task.id);
+    } catch (error) {
+      await _pendingBox.put(task.id, {
+        'type': 'update',
+        'task_id': task.id,
+        ...body,
+      });
+      debugPrint('Task update saved locally and waiting to sync: $error');
+    }
+  }
+
+  Future<void> deleteTask(AppTask task) async {
+    await _removeCacheTask(task.id);
+
+    if (task.isLocal) {
+      await _pendingBox.delete(task.id);
+      return;
+    }
+
+    await _pendingBox.put(task.id, {
+      'type': 'delete',
+      'task_id': task.id,
+    });
+
+    try {
+      await pb.collection(tasksCollection).delete(task.id);
+      await _pendingBox.delete(task.id);
+    } catch (error) {
+      debugPrint('Task deletion is waiting to sync: $error');
+    }
+  }
+
+  Future<void> syncPendingChanges() async {
+    final userId = _userId;
+    if (userId == null) return;
+
+    for (final key in List<dynamic>.from(_pendingBox.keys)) {
+      final change = _mapFromDynamic(_pendingBox.get(key));
+      if (change == null) continue;
+
+      try {
+        switch (change['type']) {
+          case 'create':
+            await pb.collection(tasksCollection).create(
+              body: {
+                'title': change['title'],
+                'description': change['description'],
+                'priority': change['priority'] ?? 'normal',
+                'is_completed': change['is_completed'] ?? false,
+                'completed_at': change['completed_at'] ?? '',
+                'user': change['user'] ?? userId,
+              },
+            );
+            break;
+
+          case 'update':
+            await pb.collection(tasksCollection).update(
+              change['task_id'].toString(),
+              body: {
+                'title': change['title'],
+                'description': change['description'],
+                'priority': change['priority'] ?? 'normal',
+                'is_completed': change['is_completed'] ?? false,
+                'completed_at': change['completed_at'] ?? '',
+              },
+            );
+            break;
+
+          case 'delete':
+            await pb.collection(tasksCollection).delete(
+              change['task_id'].toString(),
+            );
+            break;
+        }
+
+        await _pendingBox.delete(key);
+      } catch (error) {
+        debugPrint('Pending change could not sync yet: $error');
+      }
+    }
+  }
+
+  Future<void> _saveCache(List<AppTask> tasks) async {
+    await _cacheBox.put(
+      'tasks',
+      tasks.map((task) => task.toMap()).toList(),
+    );
+  }
+
+  List<AppTask> _loadCache() {
+    final raw = _cacheBox.get('tasks');
+    if (raw is! List) return [];
+
+    return raw
+        .whereType<Map>()
+        .map((item) => AppTask.fromMap(Map<String, dynamic>.from(item)))
+        .toList();
+  }
+
+  Future<void> _upsertCacheTask(AppTask task) async {
+    final tasks = _loadCache();
+    final index = tasks.indexWhere((item) => item.id == task.id);
+
+    if (index == -1) {
+      tasks.add(task);
+    } else {
+      tasks[index] = task;
+    }
+
+    await _saveCache(tasks);
+  }
+
+  Future<void> _removeCacheTask(String id) async {
+    final tasks = _loadCache()..removeWhere((task) => task.id == id);
+    await _saveCache(tasks);
+  }
+
+  Map<String, dynamic>? _mapFromDynamic(dynamic value) {
+    if (value is! Map) return null;
+    return Map<String, dynamic>.from(value);
   }
 }
 
@@ -62,64 +402,59 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final emailController = TextEditingController();
-  final passwordController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
 
-  bool isLoading = false;
-  String message = '';
+  bool _isLoading = false;
+  String _message = '';
 
-  Future<void> login() async {
+  Future<void> _login() async {
+    if (_isLoading) return;
+
     setState(() {
-      isLoading = true;
-      message = '';
+      _isLoading = true;
+      _message = '';
     });
 
     try {
-      await pb.collection('users').authWithPassword(
-        emailController.text.trim(),
-        passwordController.text,
-      );
+      await pb.collection(usersCollection).authWithPassword(
+            _emailController.text.trim(),
+            _passwordController.text,
+          );
 
       if (!mounted) return;
 
-      setState(() {
-        message = 'Login successful';
-      });
-
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => const TaskScreen(),
-        ),
+        MaterialPageRoute(builder: (_) => const TaskScreen()),
       );
     } catch (error) {
+      debugPrint('Login error: $error');
+      if (!mounted) return;
+
       setState(() {
-        message = 'Login failed. Check your email and password.';
+        _message = 'Login failed. Check your email and password.';
       });
     } finally {
       if (mounted) {
-        setState(() {
-          isLoading = false;
-        });
+        setState(() => _isLoading = false);
       }
     }
   }
 
   @override
   void dispose() {
-    emailController.dispose();
-    passwordController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Sync Task App'),
-      ),
+      appBar: AppBar(title: const Text('Sync Task App')),
       body: Center(
-        child: SizedBox(
-          width: 400,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 400),
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: Column(
@@ -132,43 +467,43 @@ class _LoginScreenState extends State<LoginScreen> {
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-
                 const SizedBox(height: 24),
-
                 TextField(
-                  controller: emailController,
+                  controller: _emailController,
+                  keyboardType: TextInputType.emailAddress,
+                  textInputAction: TextInputAction.next,
                   decoration: const InputDecoration(
                     labelText: 'Email',
                     border: OutlineInputBorder(),
                   ),
                 ),
-
                 const SizedBox(height: 16),
-
                 TextField(
-                  controller: passwordController,
+                  controller: _passwordController,
                   obscureText: true,
+                  onSubmitted: (_) => _login(),
                   decoration: const InputDecoration(
                     labelText: 'Password',
                     border: OutlineInputBorder(),
                   ),
                 ),
-
                 const SizedBox(height: 20),
-
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: isLoading ? null : login,
-                    child: isLoading
-                        ? const CircularProgressIndicator()
+                    onPressed: _isLoading ? null : _login,
+                    child: _isLoading
+                        ? const SizedBox.square(
+                            dimension: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
                         : const Text('Log in'),
                   ),
                 ),
-
-                const SizedBox(height: 16),
-
-                Text(message),
+                if (_message.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  Text(_message),
+                ],
               ],
             ),
           ),
@@ -186,705 +521,488 @@ class TaskScreen extends StatefulWidget {
 }
 
 class _TaskScreenState extends State<TaskScreen> {
-  List<RecordModel> tasks = [];
-  bool isLoading = true;
-  bool showCelebration = false;
+  final _repository = TaskRepository();
 
-@override
-void initState() {
-  super.initState();
-  initializeTasks();
-}
-Future<void> initializeTasks() async {
-  await syncPendingChanges();
-  await loadTasks();
-  await subscribeToTasks();
-}
-Future<void> subscribeToTasks() async {
-  await pb.collection('tasks').subscribe('*', (event) {
-    loadTasks();
-  });
-}
-@override
-void dispose() {
-  pb.collection('tasks').unsubscribe('*');
-  super.dispose();
-}
-  Future<void> loadTasks() async {
-  final cacheBox = Hive.box('tasks_cache');
+  late final ConfettiController _confettiController;
 
-  try {
-    final user = pb.authStore.record;
-    if (user == null) return;
+  List<AppTask> _tasks = [];
+  bool _isLoading = true;
+  bool _showCelebrationGif = false;
+  int _celebrationGeneration = 0;
 
-    final records = await pb.collection('tasks').getFullList(
-      filter: 'user = "${user.id}"',
-      sort: '-created',
+  @override
+  void initState() {
+    super.initState();
+    _confettiController = ConfettiController(
+      duration: const Duration(milliseconds: 1800),
     );
+    _initialize();
+  }
 
-    // Save a local copy of the tasks into Hive.
-   final cachedTasks = records.map((task) {
-  return {
-    'id': task.id,
-    'title': task.getStringValue('title'),
-    'description': task.getStringValue('description'),
-    'is_completed': task.getBoolValue('is_completed'),
-    'completed_at': task.getStringValue('completed_at'),
-  };
-}).toList();
+  Future<void> _initialize() async {
+    await _repository.syncPendingChanges();
+    await _reloadTasks();
+    await _subscribeToTasks();
+  }
 
-    await cacheBox.put('tasks', cachedTasks);
+  Future<void> _subscribeToTasks() async {
+    await pb.collection(tasksCollection).subscribe(
+      '*',
+      (_) => _reloadTasks(),
+    );
+  }
 
+  Future<void> _reloadTasks() async {
+    final tasks = await _repository.loadTasks();
     if (!mounted) return;
 
     setState(() {
-      tasks = records;
-      isLoading = false;
-    });
-  } catch (error) {
-    debugPrint('PocketBase unavailable. Loading cached tasks instead.');
-
-    final cachedTasks = cacheBox.get('tasks');
-
-    if (cachedTasks != null) {
-final localRecords = (cachedTasks as List).map((task) {
-  return RecordModel.fromJson({
-    'id': task['id'],
-    'title': task['title'],
-    'description': task['description'],
-    'is_completed': task['is_completed'],
-    'completed_at': task['completed_at'] ?? '',
-  });
-}).toList();
-
-      if (!mounted) return;
-
-      setState(() {
-        tasks = localRecords;
-        isLoading = false;
-      });
-    } else {
-      if (!mounted) return;
-
-      setState(() {
-        isLoading = false;
-      });
-    }
-
-    debugPrint('Load error: $error');
-  }
-}
-
-  Future<void> showAddTaskDialog() async {
-  final titleController = TextEditingController();
-  final descriptionController = TextEditingController();
-
-  await showDialog(
-    context: context,
-    builder: (dialogContext) {
-      return AlertDialog(
-        title: const Text('Add Task'),
-        content: SizedBox(
-          width: 400,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: titleController,
-                  decoration: const InputDecoration(
-                    labelText: 'Title',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: descriptionController,
-                  maxLines: 3,
-                  decoration: const InputDecoration(
-                    labelText: 'Description',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              FocusScope.of(dialogContext).unfocus();
-              Navigator.of(dialogContext).pop();
-            },
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final title = titleController.text.trim();
-              final description =
-                  descriptionController.text.trim();
-
-              if (title.isEmpty) {
-                return;
-              }
-
-              // Remove keyboard focus before closing the dialog.
-              FocusScope.of(dialogContext).unfocus();
-
-              // Close the dialog first.
-              Navigator.of(dialogContext).pop();
-
-              // Then create the task.
-              await createTask(
-                title: title,
-                description: description,
-              );
-            },
-            child: const Text('Add Task'),
-          ),
-        ],
-      );
-    },
-  );
-
-  // Give Android's text input/focus system time to detach
-  // before destroying the controllers.
-  await Future<void>.delayed(
-    const Duration(milliseconds: 100),
-  );
-
-  titleController.dispose();
-  descriptionController.dispose();
-}
-
- Future<void> createTask({
-  required String title,
-  required String description,
-}) async {
-  final user = pb.authStore.record;
-
-  if (user == null) {
-    return;
-  }
-
-  final tempId =
-      'local_${DateTime.now().microsecondsSinceEpoch}';
-
-  final localTask = {
-  'id': tempId,
-  'title': title,
-  'description': description,
-  'is_completed': false,
-  'completed_at': '',
-};
-
-  final cacheBox = Hive.box('tasks_cache');
-  final pendingBox = Hive.box('pending_changes');
-
-  // 1. Save the new task locally.
-  final cachedTasks =
-      List<dynamic>.from(cacheBox.get('tasks') ?? []);
-
-  cachedTasks.insert(0, localTask);
-
-  await cacheBox.put('tasks', cachedTasks);
-
-  // 2. Queue it for synchronization BEFORE contacting PocketBase.
-  await pendingBox.put(
-    tempId,
-    {
-      'type': 'create',
-      'temp_id': tempId,
-      'title': title,
-      'description': description,
-      'is_completed': false,
-      'completed_at': '',
-      'user': user.id,
-    },
-  );
-
-  // 3. Show the task immediately.
-  final localRecord = RecordModel.fromJson(localTask);
-
-  if (mounted) {
-    setState(() {
-      tasks.insert(0, localRecord);
+      _tasks = _sortTasks(tasks);
+      _isLoading = false;
     });
   }
 
-  try {
-    // 4. Try creating it on PocketBase.
-    await pb.collection('tasks').create(
-      body: {
-        'title': title,
-        'description': description,
-        'is_completed': false,
-        'user': user.id,
-      },
-    );
+  List<AppTask> _sortTasks(Iterable<AppTask> tasks) {
+    final sorted = List<AppTask>.from(tasks);
 
-    // 5. PocketBase received it, so remove the queued operation.
-    await pendingBox.delete(tempId);
+    sorted.sort((a, b) {
+      final priorityCompare =
+          a.priority.sortOrder.compareTo(b.priority.sortOrder);
 
-    // Reload so we get PocketBase's real record ID.
-    await loadTasks();
+      if (priorityCompare != 0) return priorityCompare;
 
-    debugPrint(
-      'New task created on PocketBase successfully.',
-    );
-  } catch (error) {
-    // Do NOT remove it from pending_changes.
-    debugPrint(
-      'Server unavailable. New task is waiting to sync.',
-    );
-  }
-}
-Future<void> updateTaskLocally(
-  RecordModel task,
-  bool newValue,
-  String completedAt,
-) async {
-  final cacheBox = Hive.box('tasks_cache');
-
-  final updatedTask = RecordModel.fromJson({
-    'id': task.id,
-    'title': task.getStringValue('title'),
-    'description': task.getStringValue('description'),
-    'is_completed': newValue,
-    'completed_at': completedAt,
-  });
-
-  final index = tasks.indexWhere(
-    (item) => item.id == task.id,
-  );
-
-  if (index != -1 && mounted) {
-    setState(() {
-      tasks[index] = updatedTask;
-    });
-  }
-
-  final cachedTasks =
-      List<dynamic>.from(cacheBox.get('tasks') ?? []);
-
-  final updatedCache = cachedTasks.map((item) {
-    final taskMap =
-        Map<String, dynamic>.from(item as Map);
-
-    if (taskMap['id'] == task.id) {
-      taskMap['is_completed'] = newValue;
-      taskMap['completed_at'] = completedAt;
-    }
-
-    return taskMap;
-  }).toList();
-
-  await cacheBox.put('tasks', updatedCache);
-}
-Future<void> savePendingTaskUpdate(
-  String taskId,
-  bool newValue,
-  String completedAt,
-) async {
-  final pendingBox = Hive.box('pending_changes');
-
-  await pendingBox.put(
-    taskId,
-    {
-      'type': 'update',
-      'task_id': taskId,
-      'is_completed': newValue,
-      'completed_at': completedAt,
-    },
-  );
-}
-Future<void> syncPendingChanges() async {
-  final pendingBox = Hive.box('pending_changes');
-
-  final pendingKeys = List<dynamic>.from(
-    pendingBox.keys,
-  );
-
-  if (pendingKeys.isEmpty) {
-    debugPrint('No pending changes to sync.');
-    return;
-  }
-
-  for (final key in pendingKeys) {
-    final rawChange = pendingBox.get(key);
-
-    if (rawChange == null) {
-      continue;
-    }
-
-    final change = Map<String, dynamic>.from(
-      rawChange as Map,
-    );
-
-    try {
-      // Existing task was changed while offline.
-      if (change['type'] == 'update') {
-        await pb.collection('tasks').update(
-          change['task_id'],
-          body: {
-  'is_completed': change['is_completed'],
-  'completed_at': change['completed_at'],
-},
-        );
-
-        await pendingBox.delete(key);
-
-        debugPrint(
-          'Pending task ${change['task_id']} synced successfully.',
-        );
+      if (a.isCompleted != b.isCompleted) {
+        return a.isCompleted ? 1 : -1;
       }
 
-      // Brand-new task was created while offline.
-      else if (change['type'] == 'create') {
-        await pb.collection('tasks').create(
-          body: {
-            'title': change['title'],
-            'description': change['description'],
-            'is_completed': change['is_completed'],
-            'completed_at': change['completed_at'] ?? '',
-            'user': change['user'],
-          },
-        );
+      return b.createdAt.compareTo(a.createdAt);
+    });
 
-        await pendingBox.delete(key);
-
-        debugPrint(
-          'Offline task "${change['title']}" created on PocketBase.',
-        );
-      }
-      else if (change['type'] == 'delete') {
-  await pb.collection('tasks').delete(
-    change['task_id'],
-  );
-
-  await pendingBox.delete(key);
-
-  debugPrint(
-    'Pending task deletion synced successfully.',
-  );
-}
-    } catch (error) {
-      debugPrint(
-        'Could not sync pending changes yet: $error',
-      );
-
-      continue;
-    }
-  }
-}
-Future<void> toggleTask(
-  RecordModel task,
-  bool newValue,
-) async {
-  // If checked, record the current UTC time.
-  // If unchecked, clear the completion time.
-  final completedAt = newValue
-      ? DateTime.now().toUtc().toIso8601String()
-      : '';
-      if (newValue) {
-  showTaskCelebration();
-}
-
-  await updateTaskLocally(
-    task,
-    newValue,
-    completedAt,
-  );
-
-  final pendingBox = Hive.box('pending_changes');
-
-  // Task was created while offline.
-  if (task.id.startsWith('local_')) {
-    final rawPending = pendingBox.get(task.id);
-
-    if (rawPending != null) {
-      final pendingCreate =
-          Map<String, dynamic>.from(rawPending as Map);
-
-      pendingCreate['is_completed'] = newValue;
-      pendingCreate['completed_at'] = completedAt;
-
-      await pendingBox.put(
-        task.id,
-        pendingCreate,
-      );
-    }
-
-    return;
+    return sorted;
   }
 
-  try {
-    await pb.collection('tasks').update(
-      task.id,
-      body: {
-        'is_completed': newValue,
-        'completed_at': completedAt,
-      },
-    );
-
-    await pendingBox.delete(task.id);
-  } catch (error) {
-    await savePendingTaskUpdate(
-      task.id,
-      newValue,
-      completedAt,
-    );
-
-    debugPrint(
-      'Server unavailable. Task update saved locally.',
-    );
-  }
-}
-Future<void> showTaskCelebration() async {
-  if (!mounted) return;
-
-  setState(() {
-    showCelebration = true;
-  });
-
-  await Future.delayed(
-    const Duration(seconds: 2),
-  );
-
-  if (!mounted) return;
-
-  setState(() {
-    showCelebration = false;
-  });
-}
-Future<void> deleteTask(RecordModel task) async {
-  final cacheBox = Hive.box('tasks_cache');
-  final pendingBox = Hive.box('pending_changes');
-
-  // Remove from the screen immediately.
-  if (mounted) {
+  void _replaceTask(AppTask updated) {
     setState(() {
-      tasks.removeWhere(
-        (item) => item.id == task.id,
-      );
+      final index = _tasks.indexWhere((task) => task.id == updated.id);
+
+      if (index == -1) {
+        _tasks.add(updated);
+      } else {
+        _tasks[index] = updated;
+      }
+
+      _tasks = _sortTasks(_tasks);
     });
   }
 
-  // Remove from Hive cache.
-  final cachedTasks =
-      List<dynamic>.from(cacheBox.get('tasks') ?? []);
+  Future<void> _showTaskDialog({AppTask? task}) async {
+    final titleController = TextEditingController(text: task?.title ?? '');
+    final descriptionController =
+        TextEditingController(text: task?.description ?? '');
 
-  cachedTasks.removeWhere(
-    (item) => item['id'] == task.id,
-  );
+    var selectedPriority = task?.priority ?? TaskPriority.normal;
 
-  await cacheBox.put('tasks', cachedTasks);
-
-  // If the task only exists locally, just remove
-  // its pending create operation.
-  if (task.id.startsWith('local_')) {
-    await pendingBox.delete(task.id);
-
-    debugPrint(
-      'Offline-created task deleted locally.',
-    );
-
-    return;
-  }
-
-  // Queue deletion before contacting PocketBase.
-  await pendingBox.put(
-    task.id,
-    {
-      'type': 'delete',
-      'task_id': task.id,
-    },
-  );
-
-  try {
-    await pb.collection('tasks').delete(task.id);
-
-    await pendingBox.delete(task.id);
-
-    debugPrint(
-      'Task deleted from PocketBase successfully.',
-    );
-  } catch (error) {
-    debugPrint(
-      'Server unavailable. Task deletion waiting to sync.',
-    );
-  }
-}
-  int get completedTaskCount {
-    return tasks
-        .where(
-          (task) => task.getBoolValue('is_completed'),
-        )
-        .length;
-  }
-
-  double get completionProgress {
-    if (tasks.isEmpty) {
-      return 0;
-    }
-
-    return completedTaskCount / tasks.length;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-return Stack(
-  children: [
-    Scaffold(
-      appBar: AppBar(
-        title: const Text('My Tasks'),
-      ),
-      body: isLoading
-          ? const Center(
-              child: CircularProgressIndicator(),
-            )
-          : Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    24,
-                    20,
-                    24,
-                    12,
-                  ),
+    final result = await showDialog<_TaskFormResult>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text(task == null ? 'Add Task' : 'Edit Task'),
+              content: SizedBox(
+                width: 420,
+                child: SingleChildScrollView(
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        '$completedTaskCount of ${tasks.length} tasks completed',
-                        style: Theme.of(context)
-                            .textTheme
-                            .titleMedium,
-                      ),
-
-                      const SizedBox(height: 10),
-
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: TweenAnimationBuilder<double>(
-                          tween: Tween<double>(
-                            begin: 0,
-                            end: completionProgress,
-                          ),
-                          duration:
-                              const Duration(milliseconds: 500),
-                          builder: (context, value, child) {
-                            return LinearProgressIndicator(
-                              value: value,
-                              minHeight: 14,
-                            );
-                          },
+                      TextField(
+                        controller: titleController,
+                        textInputAction: TextInputAction.next,
+                        decoration: const InputDecoration(
+                          labelText: 'Title',
+                          border: OutlineInputBorder(),
                         ),
                       ),
-
-                      const SizedBox(height: 8),
-
-                      Text(
-                        '${(completionProgress * 100).round()}%',
-                        style: Theme.of(context)
-                            .textTheme
-                            .bodyMedium,
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: descriptionController,
+                        maxLines: 3,
+                        decoration: const InputDecoration(
+                          labelText: 'Description',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      DropdownButtonFormField<TaskPriority>(
+                        value: selectedPriority,
+                        decoration: const InputDecoration(
+                          labelText: 'Priority',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: TaskPriority.values
+                            .map(
+                              (priority) => DropdownMenuItem(
+                                value: priority,
+                                child: Text(priority.label),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (priority) {
+                          if (priority == null) return;
+                          setDialogState(() => selectedPriority = priority);
+                        },
                       ),
                     ],
                   ),
                 ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    FocusScope.of(dialogContext).unfocus();
+                    Navigator.of(dialogContext).pop();
+                  },
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    final title = titleController.text.trim();
+                    if (title.isEmpty) return;
 
-                const Divider(height: 1),
+                    final result = _TaskFormResult(
+                      title: title,
+                      description: descriptionController.text.trim(),
+                      priority: selectedPriority,
+                    );
 
-                Expanded(
-                  child: tasks.isEmpty
-                      ? const Center(
-                          child: Text('No tasks yet'),
-                        )
-                      : ListView.builder(
-                          itemCount: tasks.length,
-                          itemBuilder: (context, index) {
-                            final task = tasks[index];
+                    FocusScope.of(dialogContext).unfocus();
+                    Navigator.of(dialogContext).pop(result);
+                  },
+                  child: Text(task == null ? 'Add Task' : 'Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
 
-                            final title =
-                                task.getStringValue('title');
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    titleController.dispose();
+    descriptionController.dispose();
 
-                            final description =
-                                task.getStringValue(
-                              'description',
-                            );
+    if (result == null || !mounted) return;
 
-                            final isCompleted =
-                                task.getBoolValue(
-                              'is_completed',
-                            );
+    if (task == null) {
+      final created = await _repository.createTask(
+        title: result.title,
+        description: result.description,
+        priority: result.priority,
+      );
 
-                return Row(
-  children: [
-    Expanded(
-      child: CheckboxListTile(
-        value: isCompleted,
-        onChanged: (value) {
-          if (value == null) {
-            return;
-          }
+      if (!mounted) return;
+      _replaceTask(created);
+      return;
+    }
 
-          toggleTask(
-            task,
-            value,
-          );
-        },
-        title: Text(
-          title,
-          style: TextStyle(
-            decoration: isCompleted
-                ? TextDecoration.lineThrough
-                : TextDecoration.none,
+    final updated = task.copyWith(
+      title: result.title,
+      description: result.description,
+      priority: result.priority,
+    );
+
+    _replaceTask(updated);
+    await _repository.updateTask(updated);
+  }
+
+  Future<void> _toggleTask(AppTask task, bool isCompleted) async {
+    final updated = task.copyWith(
+      isCompleted: isCompleted,
+      completedAt: isCompleted
+          ? DateTime.now().toUtc().toIso8601String()
+          : '',
+    );
+
+    // Update the checkbox first so the UI responds instantly.
+    _replaceTask(updated);
+
+    // Fire celebration immediately after the task becomes complete.
+    if (isCompleted) {
+      _startCelebration();
+    }
+
+    await _repository.updateTask(updated);
+  }
+
+  void _startCelebration() {
+    if (!mounted) return;
+
+    // Restarting the controller makes every completion trigger immediately,
+    // even when a previous burst is still finishing.
+    _confettiController
+      ..stop()
+      ..play();
+
+    final generation = ++_celebrationGeneration;
+
+    setState(() => _showCelebrationGif = true);
+
+    Future<void>.delayed(
+      const Duration(milliseconds: 1800),
+      () {
+        if (!mounted || generation != _celebrationGeneration) return;
+        setState(() => _showCelebrationGif = false);
+      },
+    );
+  }
+
+  Future<void> _deleteTaskWithUndo(AppTask task) async {
+    final originalIndex = _tasks.indexWhere((item) => item.id == task.id);
+    if (originalIndex == -1) return;
+
+    setState(() => _tasks.removeAt(originalIndex));
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+    var undone = false;
+
+    final controller = ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Task deleted'),
+        duration: const Duration(seconds: 5),
+        action: SnackBarAction(
+          label: 'UNDO',
+          onPressed: () {
+            undone = true;
+            if (!mounted) return;
+
+            setState(() {
+              _tasks.add(task);
+              _tasks = _sortTasks(_tasks);
+            });
+          },
+        ),
+      ),
+    );
+
+    await controller.closed;
+
+    if (!undone) {
+      await _repository.deleteTask(task);
+    }
+  }
+
+  int get _completedTaskCount =>
+      _tasks.where((task) => task.isCompleted).length;
+
+  double get _completionProgress =>
+      _tasks.isEmpty ? 0 : _completedTaskCount / _tasks.length;
+
+  @override
+  void dispose() {
+    pb.collection(tasksCollection).unsubscribe('*');
+    _confettiController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Scaffold(
+          appBar: AppBar(title: const Text('My Tasks')),
+          body: _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : Column(
+                  children: [
+                    _ProgressHeader(
+                      completed: _completedTaskCount,
+                      total: _tasks.length,
+                      progress: _completionProgress,
+                    ),
+                    const Divider(height: 1),
+                    Expanded(
+                      child: _tasks.isEmpty
+                          ? const Center(child: Text('No tasks yet'))
+                          : ListView.builder(
+                              itemCount: _tasks.length,
+                              itemBuilder: (context, index) {
+                                final task = _tasks[index];
+
+                                return _TaskTile(
+                                  task: task,
+                                  onChanged: (value) {
+                                    if (value == null) return;
+                                    _toggleTask(task, value);
+                                  },
+                                  onEdit: () => _showTaskDialog(task: task),
+                                  onDelete: () => _deleteTaskWithUndo(task),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+          floatingActionButton: FloatingActionButton(
+            onPressed: _showTaskDialog,
+            child: const Icon(Icons.add),
           ),
         ),
-        subtitle: description.isEmpty
-            ? null
-            : Text(description),
-        controlAffinity:
-            ListTileControlAffinity.leading,
+
+        // The confetti widget stays mounted permanently. Only the controller
+        // starts/stops it. This removes the delayed first burst.
+        Positioned.fill(
+          child: IgnorePointer(
+            child: Center(
+              child: ConfettiWidget(
+                confettiController: _confettiController,
+                blastDirectionality: BlastDirectionality.explosive,
+                shouldLoop: false,
+                numberOfParticles: 90,
+                emissionFrequency: 0.12,
+                gravity: 0.16,
+                maxBlastForce: 38,
+                minBlastForce: 18,
+              ),
+            ),
+          ),
+        ),
+
+        if (_showCelebrationGif)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Center(
+                child: Image.asset(
+                  'assets/animations/tungtungscuba.gif',
+                  width: 260,
+                  fit: BoxFit.contain,
+                  gaplessPlayback: true,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _TaskFormResult {
+  const _TaskFormResult({
+    required this.title,
+    required this.description,
+    required this.priority,
+  });
+
+  final String title;
+  final String description;
+  final TaskPriority priority;
+}
+
+class _ProgressHeader extends StatelessWidget {
+  const _ProgressHeader({
+    required this.completed,
+    required this.total,
+    required this.progress,
+  });
+
+  final int completed;
+  final int total;
+  final double progress;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '$completed of $total tasks completed',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: progress),
+              duration: const Duration(milliseconds: 400),
+              builder: (context, value, _) {
+                return LinearProgressIndicator(
+                  value: value,
+                  minHeight: 14,
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '${(progress * 100).round()}%',
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+        ],
       ),
-    ),
+    );
+  }
+}
 
-    IconButton(
-      icon: const Icon(Icons.delete_outline),
-      tooltip: 'Delete task',
-      onPressed: () {
-        deleteTask(task);
-      },
-    ),
+class _TaskTile extends StatelessWidget {
+  const _TaskTile({
+    required this.task,
+    required this.onChanged,
+    required this.onEdit,
+    required this.onDelete,
+  });
 
-    const SizedBox(width: 12),
-  ],
-);
-                          },
+  final AppTask task;
+  final ValueChanged<bool?> onChanged;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: CheckboxListTile(
+            value: task.isCompleted,
+            onChanged: onChanged,
+            controlAffinity: ListTileControlAffinity.leading,
+            title: Text(
+              task.title,
+              style: TextStyle(
+                decoration: task.isCompleted
+                    ? TextDecoration.lineThrough
+                    : TextDecoration.none,
+              ),
+            ),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (task.description.isNotEmpty) Text(task.description),
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    task.priority.label,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          fontWeight: FontWeight.w600,
                         ),
+                  ),
                 ),
               ],
             ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: showAddTaskDialog,
-        child: const Icon(Icons.add),
-      ),
-    ),
-
-    if (showCelebration)
-      Positioned.fill(
-        child: IgnorePointer(
-          child: Center(
-            child: Image.asset(
-              'assets/animations/tungtungscuba.gif',
-              width: 260,
-              fit: BoxFit.contain,
-            ),
           ),
         ),
-      ),
-  ],
-);
+        IconButton(
+          icon: const Icon(Icons.edit_outlined),
+          tooltip: 'Edit task',
+          onPressed: onEdit,
+        ),
+        IconButton(
+          icon: const Icon(Icons.delete_outline),
+          tooltip: 'Delete task',
+          onPressed: onDelete,
+        ),
+        const SizedBox(width: 12),
+      ],
+    );
   }
 }
