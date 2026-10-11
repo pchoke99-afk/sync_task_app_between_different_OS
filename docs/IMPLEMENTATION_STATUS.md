@@ -4,7 +4,7 @@
 
 - Flutter 3.47.2 / Dart 3.13.2; branch `feature/ai-assistant-sahur`.
 - Floating cute Sahur mascot, opaque Material chat, task proposals and explicit confirmation, paginated conversations, secure sign-in storage, user-scoped offline caches.
-- Mac microphone dictation via on-device speech recognition and image paste via local Vision OCR. Both create editable drafts; extracted image text is sent to AI rather than image bytes. Windows media input is not yet implemented.
+- Mac microphone dictation via on-device speech recognition and image paste via local Vision OCR. Both create editable drafts; extracted image text is sent to AI rather than image bytes. Windows now uses native Speech API for dictation and Windows OCR for pasted images. Native media still needs microphone/clipboard acceptance testing on a real Windows device.
 - Google Calendar Desktop OAuth on Mac; Windows browser-launch support added. Only primary-calendar busy intervals for 14 days reach the assistant; Google tokens and event titles do not. Desktop credentials and tokens are saved locally via platform secure storage.
 - Isolated Ubuntu Compose project `sync-task-ai` runs the assistant and Ollama `qwen2.5:3b`. User deployed it and confirmed working task proposals and Calendar-aware requests. PocketBase bind mounts and existing volumes were preserved.
 - Native Ollama constrained JSON replaced unreliable OpenAI-compatible tool parsing. Empty/invalid responses are rejected. Prompt size is reduced and local model calls allow six minutes. On this CPU-only server responses can take minutes.

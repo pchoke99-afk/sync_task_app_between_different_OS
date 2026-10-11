@@ -30,7 +30,7 @@ If `ssh` is unavailable, install the Windows **OpenSSH Client** optional feature
 - AI task proposals and explicit approval before task changes.
 - Google Calendar busy-time access using Desktop OAuth and the Windows default browser. Connect separately on Windows; the Mac's Keychain and Google tokens are not copied. Enter the client ID and client secret from your local Desktop OAuth JSON in the app's setup dialog. Tokens are saved using the Windows secure-storage provider.
 - Calendar reads your primary calendar's busy intervals for the next 14 days, never creates or edits Google events. Add your Google account as a test user while the OAuth app is in Testing. Google may require reconnection when test-mode authorization expires.
-- Microphone dictation and pasted-image OCR currently use macOS native frameworks and are not available on Windows in this version.
+- Microphone dictation uses Windows Speech API, and pasted-image text recognition uses Windows OCR. Enable desktop microphone access and install the speech/OCR language packs you use in Windows Settings. Click the microphone, speak, then click again to place the transcript in your draft (45-second limit). Use Ctrl+V or the paste button for an image. Audio and images remain local; only reviewed text is sent to the assistant.
 - Scheduled times are advice in task descriptions while `TASK_SCHEDULING_ENABLED=false`; enabling structured scheduling requires a separately reviewed PocketBase migration.
 
 ## Build on Windows yourself

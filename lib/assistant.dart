@@ -843,9 +843,13 @@ class _AssistantScreenState extends State<AssistantScreen> {
                       child: CallbackShortcuts(
                         bindings: {
                           if (_supportsMedia)
-                            const SingleActivator(
+                            SingleActivator(
                               LogicalKeyboardKey.keyV,
-                              meta: true,
+                              meta:
+                                  defaultTargetPlatform == TargetPlatform.macOS,
+                              control:
+                                  defaultTargetPlatform ==
+                                  TargetPlatform.windows,
                             ): () async {
                               final hasImage = await _media.hasClipboardImage();
                               if (hasImage) {

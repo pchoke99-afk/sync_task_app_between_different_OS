@@ -27,36 +27,7 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
-  calendar_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
-      flutter_controller_->engine()->messenger(), "sync_task/assistant_media",
-      &flutter::StandardMethodCodec::GetInstance());
-  calendar_channel_->SetMethodCallHandler([](const auto& call, auto result) {
-    if (call.method_name() != "openGoogleUrl") {
-      result->NotImplemented();
-      return;
-    }
-    const auto* url = call.arguments() ? std::get_if<std::string>(call.arguments()) : nullptr;
-    // Only the Google OAuth endpoint can be opened through this channel.
-    if (!url || url->rfind("https://accounts.google.com/", 0) != 0) {
-      result->Error("url", "Invalid Google sign-in address.");
-      return;
-    }
-    int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
-                                    url->data(), static_cast<int>(url->size()), nullptr, 0);
-    if (length == 0) {
-      result->Error("url", "Invalid Google sign-in address.");
-      return;
-    }
-    std::wstring wide_url(length, L'\0');
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, url->data(),
-                       static_cast<int>(url->size()), wide_url.data(), length);
-    auto opened = ShellExecuteW(nullptr, L"open", wide_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-    if (reinterpret_cast<INT_PTR>(opened) <= 32) {
-      result->Error("browser", "Could not open your browser.");
-    } else {
-      result->Success();
-    }
-  });
+  assistant_media_ = std::make_unique<AssistantMedia>(flutter_controller_->engine()->messenger(), GetHandle());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -72,7 +43,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
-  calendar_channel_.reset();
+  assistant_media_.reset();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -84,6 +55,7 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (assistant_media_ && assistant_media_->HandleMessage(message, wparam)) return 0;
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =

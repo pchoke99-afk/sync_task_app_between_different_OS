@@ -8,7 +8,7 @@ A Flutter task manager for desktop and mobile, synchronized through PocketBase. 
 
 Choose a successful **Windows download** run, download **Sync-Task-Windows-x64** under Artifacts, and extract both ZIP layers. Keep the executable, DLLs, and `data` folder together. While this work is on its feature branch, select `feature/ai-assistant-sahur`.
 
-[Windows setup and server connection](docs/WINDOWS.md) covers Tailscale, the SSH tunnel, Google Calendar, prerequisites, and building locally. Windows builds are produced on a Windows runner. Microphone dictation and pasted-image OCR are currently Mac-only.
+[Windows setup and server connection](docs/WINDOWS.md) covers Tailscale, the SSH tunnel, Google Calendar, prerequisites, and building locally. Windows builds are produced on a Windows runner. Mac and Windows provide microphone dictation and pasted-image OCR using their native local services.
 
 ## Desktop development
 

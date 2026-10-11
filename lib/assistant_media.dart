@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-/// Input stays on the Mac; only reviewed text is sent to the assistant.
+/// Input stays on the device; only reviewed text is sent to the assistant.
 class AssistantImage {
   const AssistantImage({required this.bytes, required this.text});
   final Uint8List bytes;
@@ -13,7 +13,9 @@ class AssistantMedia {
   static const _channel = MethodChannel('sync_task/assistant_media');
 
   bool get isSupported =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.macOS ||
+          defaultTargetPlatform == TargetPlatform.windows);
 
   Future<bool> hasClipboardImage() async =>
       await _channel.invokeMethod<bool>('hasClipboardImage') ?? false;
