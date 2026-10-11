@@ -1,6 +1,8 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -15,6 +17,41 @@ void main() {
   setUpAll(() {
     pb = PocketBase('http://localhost');
   });
+  testWidgets('Mac dictation creates a draft without sending a request', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    const channel = MethodChannel('sync_task/assistant_media');
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+      call,
+    ) async {
+      if (call.method == 'startSpeech') return 'Add a task to study circuits';
+      return null;
+    });
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        null,
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AssistantScreen(client: AssistantClient(pb, endpoint: '')),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Dictate message'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      'Add a task to study circuits',
+    );
+    expect(find.text('You'), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   testWidgets('Signed-out app shows working login form', (tester) async {
     await tester.pumpWidget(const SyncTaskApp());
     await tester.pump();
@@ -32,7 +69,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('not configured'), findsOneWidget);
     expect(
-      find.textContaining('review and confirm every task change'),
+      find.textContaining('approve changes before they are saved'),
       findsOneWidget,
     );
   });

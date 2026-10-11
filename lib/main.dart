@@ -1094,19 +1094,6 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
             title: const Text('My Tasks'),
             actions: [
               IconButton(
-                tooltip: 'AI Assistant',
-                icon: const Icon(Icons.auto_awesome),
-                onPressed: () async {
-                  await Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) =>
-                          AssistantScreen(client: AssistantClient(pb)),
-                    ),
-                  );
-                  if (mounted) await _initialize();
-                },
-              ),
-              IconButton(
                 tooltip: 'Sync tasks',
                 icon: const Icon(Icons.sync),
                 onPressed: _initialize,
@@ -1150,9 +1137,54 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
                     ),
                   ],
                 ),
-          floatingActionButton: FloatingActionButton(
-            onPressed: _showTaskDialog,
-            child: const Icon(Icons.add),
+          floatingActionButton: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Tooltip(
+                message: 'Chat with Tung Tung Sahur',
+                child: Semantics(
+                  button: true,
+                  label: 'Chat with Tung Tung Sahur',
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(24),
+                    onTap: () async {
+                      await showDialog<void>(
+                        context: context,
+                        builder: (dialogContext) => Dialog(
+                          insetPadding: const EdgeInsets.all(16),
+                          clipBehavior: Clip.antiAlias,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                          child: SizedBox(
+                            width: 440,
+                            height:
+                                (MediaQuery.sizeOf(dialogContext).height - 48)
+                                    .clamp(240.0, 680.0),
+                            child: AssistantScreen(client: AssistantClient(pb)),
+                          ),
+                        ),
+                      );
+                      if (mounted) await _initialize();
+                    },
+                    child: SizedBox(
+                      width: 80,
+                      height: 104,
+                      child: Image.asset(
+                        'assets/assistant/tung_tung_sahur.png',
+                        fit: BoxFit.contain,
+                        excludeFromSemantics: true,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              FloatingActionButton(
+                onPressed: _showTaskDialog,
+                child: const Icon(Icons.add),
+              ),
+            ],
           ),
         ),
 

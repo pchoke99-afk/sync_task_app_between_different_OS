@@ -37,3 +37,17 @@ class HTTPContract(unittest.TestCase):
         result=service.request_json(self.base+'/chat','POST',{'message':'Create exam'},'Bearer test')
         with self.assertRaises(service.Error):service.request_json(self.base+'/proposals/'+result['proposal']['id']+'/decision','POST',{'confirm':'yes'},'Bearer test')
         self.assertEqual(self.pb.executed,[])
+
+    def test_chat_accepts_calendar_availability_without_task_writes(self):
+        availability = {'time_min':'2026-10-11T00:00:00Z', 'time_max':'2026-10-12T00:00:00Z', 'busy':[{'start':'2026-10-11T10:00:00Z','end':'2026-10-11T11:00:00Z'}]}
+        result = service.request_json(self.base+'/chat', 'POST', {'message':'Create a study task', 'calendar_availability':availability}, 'Bearer test')
+        self.assertIsNotNone(result['proposal'])
+        self.assertEqual(self.pb.executed, [])
+
+    def test_chat_rejects_unknown_request_fields(self):
+        import urllib.request, urllib.error
+        request = urllib.request.Request(self.base+'/chat', data=json.dumps({'message':'Study', 'unexpected':True}).encode(), headers={'Authorization':'Bearer test', 'Content-Type':'application/json'})
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request)
+        self.assertEqual(caught.exception.code, 400)
+        self.assertEqual(self.pb.executed, [])

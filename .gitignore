@@ -53,3 +53,13 @@ backend/.env
 *.sqlite3-*
 __pycache__/
 *.pyc
+
+# OAuth clients, local credentials, and exported data
+client_secret*.json
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*

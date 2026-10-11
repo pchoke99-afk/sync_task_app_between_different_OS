@@ -1,9 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:pocketbase/pocketbase.dart';
+
+import 'assistant_media.dart';
+import 'google_calendar.dart';
 
 const sahurMascotAsset = 'assets/assistant/tung_tung_sahur.png';
 
@@ -72,7 +78,7 @@ class AssistantClient {
         await (body == null
                 ? transport.get(uri, headers: headers)
                 : transport.post(uri, headers: headers, body: jsonEncode(body)))
-            .timeout(const Duration(seconds: 100));
+            .timeout(const Duration(seconds: 500));
     if (pb.authStore.record?.id != user) {
       throw StateError('Session changed. Please reopen the assistant.');
     }
@@ -101,6 +107,104 @@ class AssistantScreen extends StatefulWidget {
 
 class _AssistantScreenState extends State<AssistantScreen> {
   final _input = TextEditingController();
+  late final GoogleCalendarConnection _calendar;
+  bool _calendarConnected = false;
+
+  Future<void> _connectCalendar() async {
+    final config = await _calendar.configuration;
+    if (!mounted) return;
+    final id = TextEditingController(text: config?['client_id']);
+    final secret = TextEditingController(text: config?['client_secret']);
+    try {
+      final approved = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Connect Google Calendar'),
+          content: SizedBox(
+            width: 400,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Use a Desktop app OAuth client from Google Cloud. This connection reads busy times from your primary calendar; it cannot edit calendar events.',
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: id,
+                    decoration: const InputDecoration(
+                      labelText: 'OAuth client ID',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: secret,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Desktop client secret',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Credentials and Google tokens are stored in your Mac Keychain. Only busy times are shared with your local assistant.',
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Continue with Google'),
+            ),
+          ],
+        ),
+      );
+      if (approved != true || !mounted) return;
+      await _calendar.configure(id.text.trim(), secret.text.trim());
+      await _calendar.connect();
+      if (mounted) setState(() => _calendarConnected = true);
+    } finally {
+      id.dispose();
+      secret.dispose();
+    }
+  }
+
+  Future<void> _calendarSettings() async {
+    if (!_calendarConnected) {
+      await _connectCalendar();
+      return;
+    }
+    final disconnect = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Google Calendar connected'),
+        content: const Text(
+          'Sahur uses busy times from your primary calendar for the next 14 days. Event titles and Google tokens are not shared. Disconnect removes this task account’s saved Google tokens from the Mac.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep connected'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Disconnect'),
+          ),
+        ],
+      ),
+    );
+    if (disconnect == true) {
+      await _calendar.disconnect();
+      if (mounted) setState(() => _calendarConnected = false);
+    }
+  }
+
   List<Map<String, dynamic>> _messages = [];
   List<Map<String, dynamic>> _proposals = [];
   List<Map<String, dynamic>> _conversations = [];
@@ -108,10 +212,74 @@ class _AssistantScreenState extends State<AssistantScreen> {
   String? _error;
   bool _busy = false;
   bool _hasOlder = false;
+  final _media = const AssistantMedia();
+  Uint8List? _image;
+  String _imageText = '';
+  bool _listening = false;
+  bool _mediaBusy = false;
+  bool get _supportsMedia => _media.isSupported;
+  bool get _supportsCalendar =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.macOS ||
+          defaultTargetPlatform == TargetPlatform.windows);
+
+  Future<void> _pasteImage() async {
+    if (_mediaBusy || _busy) return;
+    setState(() => _mediaBusy = true);
+    try {
+      final data = await _media.pasteImage();
+      if (!mounted || data == null) return;
+      setState(() {
+        _image = data.bytes;
+        _imageText = data.text;
+        _error = _imageText.isEmpty
+            ? 'No readable text found. Describe this image in your message; the local model cannot see pictures.'
+            : null;
+      });
+    } on PlatformException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _mediaBusy = false);
+    }
+  }
+
+  Future<void> _toggleMicrophone() async {
+    if (_listening) {
+      await _media.stopDictation();
+      if (mounted) setState(() => _listening = false);
+      return;
+    }
+    final draft = _input.text;
+    setState(() {
+      _listening = true;
+      _error = null;
+    });
+    try {
+      final text = await _media.dictate();
+      if (mounted && text != null && text.isNotEmpty) {
+        _input.text = [draft, text].where((part) => part.isNotEmpty).join(' ');
+        _input.selection = TextSelection.collapsed(offset: _input.text.length);
+      }
+    } on PlatformException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _listening = false);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
-    _run(_list);
+    _calendar = GoogleCalendarConnection(
+      widget.client.pb.authStore.record?.id ?? '',
+    );
+    _run(() async {
+      await _list();
+      if (_supportsCalendar) {
+        final connected = await _calendar.isConnected;
+        if (mounted) setState(() => _calendarConnected = connected);
+      }
+    });
   }
 
   Future<void> _run(Future<void> Function() action) async {
@@ -125,7 +293,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
     } catch (error) {
       if (mounted) {
         setState(
-          () => _error = error is StateError ? error.message.toString() : 'Cloud AI is unavailable. Check Tailscale and your internet connection. Cached tasks remain available.',
+          () => _error = error is StateError ? error.message.toString() : 'The assistant is unavailable. Check your server connection and try again.',
         );
       }
     } finally {
@@ -172,8 +340,20 @@ class _AssistantScreenState extends State<AssistantScreen> {
   }
 
   Future<void> _send() async {
-    final message = _input.text.trim();
+    final message = [
+      _input.text.trim(),
+      if (_imageText.isNotEmpty)
+        'Text extracted from an attached image (may contain errors):\n$_imageText',
+    ].where((part) => part.isNotEmpty).join('\n\n');
+    if (message.length > 4000) {
+      throw StateError(
+        'The message and image text exceed 4,000 characters. Shorten the message or use a smaller screenshot.',
+      );
+    }
     if (message.isEmpty) return;
+    final availability = _calendarConnected
+        ? await _calendar.availability()
+        : null;
     final now = DateTime.now();
     final data = await widget.client.request(
       '/chat',
@@ -182,10 +362,15 @@ class _AssistantScreenState extends State<AssistantScreen> {
         'conversation_id': _conversation,
         'local_time': now.toIso8601String() + _offset(now.timeZoneOffset),
         'time_zone': now.timeZoneName,
+        'calendar_availability': ?availability,
       },
     );
     if (!mounted) return;
     _input.clear();
+    setState(() {
+      _image = null;
+      _imageText = '';
+    });
     await _open(data['conversation_id'] as String);
     await _list();
   }
@@ -240,36 +425,27 @@ class _AssistantScreenState extends State<AssistantScreen> {
 
   @override
   void dispose() {
+    if (_listening) _media.stopDictation();
     _input.dispose();
+    _calendar.close();
     widget.client.close();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = ThemeData(
-      useMaterial3: true,
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xFFD99746),
-        brightness: Brightness.dark,
-      ),
-      scaffoldBackgroundColor: const Color(0xFF17110E),
-      appBarTheme: const AppBarTheme(backgroundColor: Color(0xFF211812)),
-      cardTheme: const CardThemeData(color: Color(0xFF2B211A), elevation: 0),
-      inputDecorationTheme: InputDecorationTheme(
-        filled: true,
-        fillColor: const Color(0xFF2B211A),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(18)),
-      ),
-    );
-    return Theme(
-      data: theme,
-      child: Builder(builder: (context) => _buildChat(context)),
-    );
+    return _buildChat(context);
   }
 
   Widget _buildChat(BuildContext context) => Scaffold(
+    backgroundColor: Theme.of(context).colorScheme.surface,
     appBar: AppBar(
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      leading: IconButton(
+        tooltip: 'Close chat',
+        icon: const Icon(Icons.close),
+        onPressed: () => Navigator.of(context).maybePop(),
+      ),
       title: const Row(
         children: [
           _SahurAvatar(size: 40),
@@ -284,7 +460,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
                 ),
                 Text(
                   'Your task assistant',
-                  style: TextStyle(fontSize: 12, color: Color(0xFFCEBBA5)),
+                  style: TextStyle(fontSize: 12, color: Color(0xFF625D6B)),
                 ),
               ],
             ),
@@ -311,6 +487,27 @@ class _AssistantScreenState extends State<AssistantScreen> {
         constraints: const BoxConstraints(maxWidth: 900),
         child: Column(
           children: [
+            if (_supportsCalendar)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                  child: TextButton.icon(
+                    icon: Icon(
+                      _calendarConnected
+                          ? Icons.event_available
+                          : Icons.calendar_month,
+                      size: 18,
+                    ),
+                    label: Text(
+                      _calendarConnected
+                          ? 'Calendar connected'
+                          : 'Connect Google Calendar',
+                    ),
+                    onPressed: _busy ? null : () => _run(_calendarSettings),
+                  ),
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.all(12),
               child: Row(
@@ -368,7 +565,15 @@ class _AssistantScreenState extends State<AssistantScreen> {
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
               ),
-            if (_busy) const LinearProgressIndicator(),
+            if (_busy) ...[
+              const LinearProgressIndicator(),
+              const Padding(
+                padding: EdgeInsets.all(8),
+                child: Text(
+                  'Working on your request… local AI can take a few minutes.',
+                ),
+              ),
+            ],
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.all(16),
@@ -379,18 +584,18 @@ class _AssistantScreenState extends State<AssistantScreen> {
                         const SizedBox(height: 8),
                         Image.asset(
                           sahurMascotAsset,
-                          height: 190,
+                          height: 100,
                           cacheWidth: 384,
                           semanticLabel: 'Tung Tung Sahur, a smiling wooden character holding a bat',
                         ),
                         const SizedBox(height: 12),
                         Text(
-                          'Tung tung! Let’s get things done.',
+                          'What can I help you with?',
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.titleLarge
                               ?.copyWith(
                                 fontWeight: FontWeight.bold,
-                                color: const Color(0xFFE5AE6D),
+                                color: Theme.of(context).colorScheme.primary,
                               ),
                         ),
                         const Padding(
@@ -399,9 +604,9 @@ class _AssistantScreenState extends State<AssistantScreen> {
                             horizontal: 12,
                           ),
                           child: Text(
-                            'Ask what to work on today, plan a study schedule, or propose new tasks. You review and confirm every task change. Cloud AI needs an online connection.',
+                            'Create tasks, update your plans, or choose what to work on next. You approve changes before they are saved.',
                             textAlign: TextAlign.center,
-                            style: TextStyle(color: Color(0xFFCEBBA5)),
+                            style: TextStyle(color: Color(0xFF625D6B)),
                           ),
                         ),
                         Wrap(
@@ -443,8 +648,10 @@ class _AssistantScreenState extends State<AssistantScreen> {
                         constraints: const BoxConstraints(maxWidth: 660),
                         child: Card(
                           color: m['role'] == 'user'
-                              ? const Color(0xFF483322)
-                              : const Color(0xFF2B211A),
+                              ? Theme.of(context).colorScheme.primaryContainer
+                              : Theme.of(context)
+                                    .colorScheme
+                                    .surfaceContainerLow,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(20),
                           ),
@@ -463,9 +670,11 @@ class _AssistantScreenState extends State<AssistantScreen> {
                                       m['role'] == 'user'
                                           ? 'You'
                                           : 'Tung Tung Sahur',
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Color(0xFFE5AE6D),
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .primary,
                                       ),
                                     ),
                                   ],
@@ -549,6 +758,61 @@ class _AssistantScreenState extends State<AssistantScreen> {
                 ],
               ),
             ),
+            if (_image != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.memory(
+                        _image!,
+                        width: 64,
+                        height: 64,
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        _imageText.isEmpty
+                            ? 'Image attached · add a description'
+                            : 'Image attached · text extracted',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Remove image',
+                      onPressed: () => setState(() {
+                        _image = null;
+                        _imageText = '';
+                      }),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
+              ),
+            if (_imageText.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: ExpansionTile(
+                  title: const Text('Review extracted text'),
+                  tilePadding: EdgeInsets.zero,
+                  children: [
+                    SizedBox(
+                      height: 100,
+                      child: SingleChildScrollView(
+                        child: SelectableText(_imageText),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            if (_listening)
+              const Padding(
+                padding: EdgeInsets.all(8),
+                child: Text('Listening… tap the microphone to finish.'),
+              ),
             SafeArea(
               top: false,
               child: Padding(
@@ -556,23 +820,83 @@ class _AssistantScreenState extends State<AssistantScreen> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _input,
-                        minLines: 1,
-                        maxLines: 5,
-                        maxLength: 4000,
-                        decoration: const InputDecoration(
-                          hintText: 'Ask Tung Tung Sahur…',
-                          border: OutlineInputBorder(),
+                    if (_supportsMedia) ...[
+                      IconButton(
+                        tooltip: 'Paste image',
+                        onPressed: _busy || _mediaBusy ? null : _pasteImage,
+                        icon: const Icon(Icons.content_paste),
+                      ),
+                      IconButton(
+                        tooltip: _listening
+                            ? 'Finish recording'
+                            : 'Dictate message',
+                        onPressed: _busy ? null : _toggleMicrophone,
+                        icon: Icon(
+                          _listening ? Icons.stop_circle : Icons.mic_none,
                         ),
-                        onSubmitted: (_) => _run(_send),
+                        color: _listening
+                            ? Theme.of(context).colorScheme.error
+                            : null,
+                      ),
+                    ],
+                    Expanded(
+                      child: CallbackShortcuts(
+                        bindings: {
+                          if (_supportsMedia)
+                            const SingleActivator(
+                              LogicalKeyboardKey.keyV,
+                              meta: true,
+                            ): () async {
+                              final hasImage = await _media.hasClipboardImage();
+                              if (hasImage) {
+                                await _pasteImage();
+                              } else {
+                                final text = await Clipboard.getData(
+                                  Clipboard.kTextPlain,
+                                );
+                                if (mounted && text?.text != null) {
+                                  final selection = _input.selection;
+                                  final start = selection.isValid
+                                      ? selection.start
+                                      : _input.text.length;
+                                  final end = selection.isValid
+                                      ? selection.end
+                                      : start;
+                                  _input.value = TextEditingValue(
+                                    text: _input.text.replaceRange(
+                                      start,
+                                      end,
+                                      text!.text!,
+                                    ),
+                                    selection: TextSelection.collapsed(
+                                      offset: start + text.text!.length,
+                                    ),
+                                  );
+                                }
+                              }
+                            },
+                        },
+                        child: TextField(
+                          controller: _input,
+                          minLines: 1,
+                          maxLines: 5,
+                          maxLength: 4000,
+                          decoration: const InputDecoration(
+                            hintText: 'Ask Tung Tung Sahur…',
+                            border: OutlineInputBorder(),
+                          ),
+                          onSubmitted: (_) {
+                            if (!_listening && !_mediaBusy) _run(_send);
+                          },
+                        ),
                       ),
                     ),
                     const SizedBox(width: 8),
                     IconButton.filled(
                       tooltip: 'Send message',
-                      onPressed: _busy ? null : () => _run(_send),
+                      onPressed: _busy || _listening || _mediaBusy
+                          ? null
+                          : () => _run(_send),
                       icon: const Icon(Icons.send),
                     ),
                   ],
@@ -595,8 +919,8 @@ class _SahurAvatar extends StatelessWidget {
     height: size,
     decoration: BoxDecoration(
       shape: BoxShape.circle,
-      color: const Color(0xFF4C3522),
-      border: Border.all(color: const Color(0xFFA9723B)),
+      color: Theme.of(context).colorScheme.primaryContainer,
+      border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
     ),
     child: ClipOval(
       child: Image.asset(
