@@ -15,3 +15,9 @@ A few resources to get you started if this is your first Flutter project:
 For help getting started with Flutter development, view the
 [online documentation](https://docs.flutter.dev/), which offers tutorials,
 samples, guidance on mobile development, and a full API reference.
+
+## AI Assistant and release workflow
+
+- [Implementation and test status](docs/IMPLEMENTATION_STATUS.md)
+- [Backend deployment, migrations and offline recovery](docs/AI_DEPLOYMENT.md)
+- [Free iPhone signing and data preservation](docs/TESTFLIGHT.md)

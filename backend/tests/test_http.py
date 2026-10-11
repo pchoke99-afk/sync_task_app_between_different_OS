@@ -37,4 +37,3 @@ class HTTPContract(unittest.TestCase):
         result=service.request_json(self.base+'/chat','POST',{'message':'Create exam'},'Bearer test')
         with self.assertRaises(service.Error):service.request_json(self.base+'/proposals/'+result['proposal']['id']+'/decision','POST',{'confirm':'yes'},'Bearer test')
         self.assertEqual(self.pb.executed,[])
-
