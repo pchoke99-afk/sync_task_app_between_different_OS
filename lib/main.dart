@@ -2,9 +2,17 @@ import 'package:confetti/confetti.dart';
 import 'package:flutter/material.dart';
 import 'package:hive_ce_flutter/hive_flutter.dart';
 import 'package:pocketbase/pocketbase.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
-const pocketBaseUrl = 'http://100.117.123.116:8090';
+import 'dart:async';
+import 'dart:math';
+
+import 'assistant.dart';
+import 'session.dart';
+
+const pocketBaseUrl = String.fromEnvironment(
+  'POCKETBASE_URL',
+  defaultValue: 'http://100.117.123.116:8090',
+);
 const tasksCollection = 'tasks';
 const usersCollection = 'users';
 const tasksCacheBoxName = 'tasks_cache';
@@ -19,12 +27,33 @@ Future<void> main() async {
   await Hive.openBox(tasksCacheBoxName);
   await Hive.openBox(pendingChangesBoxName);
 
-  final prefs = await SharedPreferences.getInstance();
-  final authStore = AsyncAuthStore(
-    initial: prefs.getString('pb_auth'),
-    save: (data) => prefs.setString('pb_auth', data),
-    clear: () => prefs.remove('pb_auth'),
-  );
+  AuthStore authStore;
+  try {
+    authStore = await createAuthStore();
+  } catch (_) {
+    runApp(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Secure sign-in storage could not be opened. Unlock your device and try again. Your task data has been preserved.',
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton(onPressed: main, child: const Text('Try again')),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    return;
+  }
 
   pb = PocketBase(pocketBaseUrl, authStore: authStore);
   runApp(const SyncTaskApp());
@@ -42,7 +71,11 @@ class SyncTaskApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
-      home: pb.authStore.isValid ? const TaskScreen() : const LoginScreen(),
+      home: SessionGate(
+        client: pb,
+        signedIn: const TaskScreen(),
+        signedOut: const LoginScreen(),
+      ),
     );
   }
 }
@@ -91,6 +124,10 @@ class AppTask {
     required this.isCompleted,
     required this.completedAt,
     required this.createdAt,
+    this.dueAt = '',
+    this.estimatedMinutes = 0,
+    this.category = '',
+    this.scheduledAt = '',
   });
 
   final String id;
@@ -100,6 +137,10 @@ class AppTask {
   final bool isCompleted;
   final String completedAt;
   final String createdAt;
+  final String dueAt;
+  final int estimatedMinutes;
+  final String category;
+  final String scheduledAt;
 
   bool get isLocal => id.startsWith('local_');
 
@@ -111,6 +152,10 @@ class AppTask {
     bool? isCompleted,
     String? completedAt,
     String? createdAt,
+    String? dueAt,
+    int? estimatedMinutes,
+    String? category,
+    String? scheduledAt,
   }) {
     return AppTask(
       id: id ?? this.id,
@@ -120,6 +165,10 @@ class AppTask {
       isCompleted: isCompleted ?? this.isCompleted,
       completedAt: completedAt ?? this.completedAt,
       createdAt: createdAt ?? this.createdAt,
+      dueAt: dueAt ?? this.dueAt,
+      estimatedMinutes: estimatedMinutes ?? this.estimatedMinutes,
+      category: category ?? this.category,
+      scheduledAt: scheduledAt ?? this.scheduledAt,
     );
   }
 
@@ -132,6 +181,10 @@ class AppTask {
       isCompleted: record.getBoolValue('is_completed'),
       completedAt: record.getStringValue('completed_at'),
       createdAt: record.getStringValue('created'),
+      dueAt: record.getStringValue('due_at'),
+      estimatedMinutes: record.getIntValue('estimated_minutes'),
+      category: record.getStringValue('category'),
+      scheduledAt: record.getStringValue('scheduled_at'),
     );
   }
 
@@ -146,6 +199,10 @@ class AppTask {
       isCompleted: map['is_completed'] == true,
       completedAt: map['completed_at']?.toString() ?? '',
       createdAt: map['created_at']?.toString() ?? '',
+      dueAt: map['due_at']?.toString() ?? '',
+      estimatedMinutes: (map['estimated_minutes'] as num?)?.toInt() ?? 0,
+      category: map['category']?.toString() ?? '',
+      scheduledAt: map['scheduled_at']?.toString() ?? '',
     );
   }
 
@@ -158,8 +215,16 @@ class AppTask {
       'is_completed': isCompleted,
       'completed_at': completedAt,
       'created_at': createdAt,
+      ...schedulingBody(),
     };
   }
+
+  Map<String, dynamic> schedulingBody() => {
+    'due_at': dueAt,
+    'estimated_minutes': estimatedMinutes,
+    'category': category,
+    'scheduled_at': scheduledAt,
+  };
 
   Map<String, dynamic> toServerBody(String userId) {
     return {
@@ -169,228 +234,313 @@ class AppTask {
       'is_completed': isCompleted,
       'completed_at': completedAt,
       'user': userId,
+      if (const bool.fromEnvironment('TASK_SCHEDULING_ENABLED'))
+        ...schedulingBody(),
     };
   }
 }
 
 class TaskRepository {
+  TaskRepository() : userId = pb.authStore.record?.id;
+  final String? userId;
   final Box _cacheBox = Hive.box(tasksCacheBoxName);
   final Box _pendingBox = Hive.box(pendingChangesBoxName);
+  Future<void> _queue = Future<void>.value();
+  String get _cacheKey => 'tasks:$userId';
+  String _key(String id) => '$userId:$id';
 
-  String? get _userId => pb.authStore.record?.id;
-
-  Future<List<AppTask>> loadTasks() async {
-    final userId = _userId;
-    if (userId == null) return const [];
-
-    try {
-      final records = await pb.collection(tasksCollection).getFullList(
-            filter: 'user = "$userId"',
-            sort: '-created',
-          );
-
-      final tasks = records.map(AppTask.fromRecord).toList();
-      await _saveCache(tasks);
-      return tasks;
-    } catch (error) {
-      debugPrint('Loading cached tasks because PocketBase is unavailable: $error');
-      return _loadCache();
+  void _checkSession() {
+    if (userId == null || pb.authStore.record?.id != userId) {
+      throw StateError('Session changed.');
     }
   }
+
+  Future<T> _serial<T>(Future<T> Function() action) {
+    final result = _queue.then((_) {
+      _checkSession();
+      return action();
+    });
+    _queue = result.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stack) {},
+    );
+    return result;
+  }
+
+  Future<T> _network<T>(Future<T> Function() action) async {
+    _checkSession();
+    try {
+      final result = await action().timeout(const Duration(seconds: 12));
+      _checkSession();
+      return result;
+    } on ClientException catch (error) {
+      if (error.statusCode == 401) pb.authStore.clear();
+      rethrow;
+    }
+  }
+
+  List<AppTask> _loadCache() {
+    final raw = _cacheBox.get(_cacheKey);
+    if (raw is! List) return [];
+    return raw
+        .whereType<Map>()
+        .map((m) => AppTask.fromMap(Map<String, dynamic>.from(m)))
+        .toList();
+  }
+
+  Future<void> _saveCache(List<AppTask> tasks) =>
+      _cacheBox.put(_cacheKey, tasks.map((t) => t.toMap()).toList());
+
+  Future<void> _upsert(AppTask task) async {
+    final tasks = _loadCache();
+    final index = tasks.indexWhere((t) => t.id == task.id);
+    if (index < 0) {
+      tasks.add(task);
+    } else {
+      tasks[index] = task;
+    }
+    await _saveCache(tasks);
+  }
+
+  Iterable<MapEntry<dynamic, Map<String, dynamic>>> _changes() sync* {
+    for (final key in List<dynamic>.from(_pendingBox.keys)) {
+      final raw = _pendingBox.get(key);
+      if (raw is Map && raw['owner'] == userId) {
+        yield MapEntry(key, Map<String, dynamic>.from(raw));
+      }
+    }
+  }
+
+  Future<void> _recoverLegacy(List<RecordModel> records) async {
+    final owned = {for (final record in records) record.id: record};
+    final cached = _cacheBox.get('tasks');
+    final legacyCache = cached is List
+        ? cached
+              .whereType<Map>()
+              .map((m) => AppTask.fromMap(Map<String, dynamic>.from(m)))
+              .toList()
+        : <AppTask>[];
+    // Only online-verified server records and explicitly user-tagged creates are migrated.
+    // The old shared boxes remain intact as a recovery backup.
+    for (final key in List<dynamic>.from(_pendingBox.keys)) {
+      final raw = _pendingBox.get(key);
+      if (raw is! Map || raw.containsKey('owner')) continue;
+      final marker = 'legacy:$userId:$key';
+      if (_pendingBox.get(marker) == true) continue;
+      final change = Map<String, dynamic>.from(raw);
+      final oldId = (change['temp_id'] ?? change['task_id'] ?? key).toString();
+      AppTask? task;
+      if (change['type'] == 'create' && change['user'] == userId) {
+        final chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+        final random = Random.secure();
+        final idKey = 'legacy-id:$userId:$key';
+        final id =
+            _pendingBox.get(idKey) as String? ??
+            List.generate(
+              15,
+              (_) => chars[random.nextInt(chars.length)],
+            ).join();
+        await _pendingBox.put(idKey, id);
+        task = AppTask.fromMap({
+          ...change,
+          'id': id,
+          'created_at': DateTime.now().toUtc().toIso8601String(),
+        });
+      } else if (['update', 'delete'].contains(change['type']) &&
+          owned.containsKey(oldId)) {
+        final record = owned[oldId]!;
+        task = AppTask.fromMap({
+          ...AppTask.fromRecord(record).toMap(),
+          ...change,
+          'id': oldId,
+        });
+      }
+      if (task == null) continue;
+      // Do not replace edits already made with this version of the app.
+      if (!_pendingBox.containsKey(_key(task.id))) {
+        await _pendingBox.put(_key(task.id), {
+          'owner': userId,
+          'type': change['type'],
+          'task': task.toMap(),
+        });
+        if (change['type'] != 'delete') await _upsert(task);
+      }
+      await _pendingBox.put(marker, true);
+    }
+    for (final task in legacyCache) {
+      if (owned.containsKey(task.id) &&
+          !_pendingBox.containsKey(_key(task.id))) {
+        await _upsert(task);
+      }
+    }
+  }
+
+  Future<List<AppTask>> loadTasks() => _serial(() async {
+    try {
+      final records = await _network(
+        () => pb
+            .collection(tasksCollection)
+            .getFullList(
+              filter: pb.filter('user = {:user}', {'user': userId}),
+              sort: '-created',
+            ),
+      );
+      await _recoverLegacy(records);
+      final merged = {for (final r in records) r.id: AppTask.fromRecord(r)};
+      for (final entry in _changes()) {
+        final change = entry.value;
+        final task = AppTask.fromMap(
+          Map<String, dynamic>.from(change['task'] as Map),
+        );
+        if (change['type'] == 'delete') {
+          merged.remove(task.id);
+        } else {
+          merged[task.id] = task;
+        }
+      }
+      final tasks = merged.values.toList();
+      await _saveCache(tasks);
+      return tasks;
+    } catch (_) {
+      _checkSession();
+      return _loadCache();
+    }
+  });
 
   Future<AppTask> createTask({
     required String title,
     required String description,
     required TaskPriority priority,
-  }) async {
-    final userId = _userId;
-    if (userId == null) throw StateError('No authenticated user.');
-
-    final tempId = 'local_${DateTime.now().microsecondsSinceEpoch}';
+    String dueAt = '',
+    int estimatedMinutes = 0,
+    String category = '',
+    String scheduledAt = '',
+  }) => _serial(() async {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    final random = Random.secure();
+    final recordId = List.generate(
+      15,
+      (_) => chars[random.nextInt(chars.length)],
+    ).join();
     final task = AppTask(
-      id: tempId,
+      id: recordId,
       title: title,
       description: description,
       priority: priority,
       isCompleted: false,
       completedAt: '',
       createdAt: DateTime.now().toUtc().toIso8601String(),
+      dueAt: dueAt,
+      estimatedMinutes: estimatedMinutes,
+      category: category,
+      scheduledAt: scheduledAt,
     );
-
-    await _upsertCacheTask(task);
-    await _pendingBox.put(tempId, {
+    await _upsert(task);
+    await _pendingBox.put(_key(task.id), {
+      'owner': userId,
       'type': 'create',
-      'temp_id': tempId,
-      ...task.toServerBody(userId),
+      'task': task.toMap(),
     });
+    await _sync();
+    return _loadCache().firstWhere((t) => t.id == task.id, orElse: () => task);
+  });
 
-    try {
-      final record = await pb.collection(tasksCollection).create(
-            body: task.toServerBody(userId),
-          );
+  Future<void> updateTask(AppTask task) => _serial(() async {
+    await _upsert(task);
+    final existing = _pendingBox.get(_key(task.id));
+    await _pendingBox.put(_key(task.id), {
+      'owner': userId,
+      'type': existing is Map && existing['type'] == 'create'
+          ? 'create'
+          : 'update',
+      'task': task.toMap(),
+    });
+    await _sync();
+  });
 
-      await _pendingBox.delete(tempId);
-      await _removeCacheTask(tempId);
-
-      final serverTask = AppTask.fromRecord(record);
-      await _upsertCacheTask(serverTask);
-      return serverTask;
-    } catch (error) {
-      debugPrint('New task saved locally and waiting to sync: $error');
-      return task;
-    }
-  }
-
-  Future<void> updateTask(AppTask task) async {
-    final userId = _userId;
-    if (userId == null) throw StateError('No authenticated user.');
-
-    await _upsertCacheTask(task);
-
-    if (task.isLocal) {
-      final pending = _mapFromDynamic(_pendingBox.get(task.id));
-      if (pending != null) {
-        pending
-          ..['title'] = task.title
-          ..['description'] = task.description
-          ..['priority'] = task.priority.name
-          ..['is_completed'] = task.isCompleted
-          ..['completed_at'] = task.completedAt;
-        await _pendingBox.put(task.id, pending);
-      }
-      return;
-    }
-
-    final body = {
-      'title': task.title,
-      'description': task.description,
-      'priority': task.priority.name,
-      'is_completed': task.isCompleted,
-      'completed_at': task.completedAt,
-    };
-
-    try {
-      await pb.collection(tasksCollection).update(task.id, body: body);
-      await _pendingBox.delete(task.id);
-    } catch (error) {
-      await _pendingBox.put(task.id, {
-        'type': 'update',
-        'task_id': task.id,
-        ...body,
-      });
-      debugPrint('Task update saved locally and waiting to sync: $error');
-    }
-  }
-
-  Future<void> deleteTask(AppTask task) async {
-    await _removeCacheTask(task.id);
-
-    if (task.isLocal) {
-      await _pendingBox.delete(task.id);
-      return;
-    }
-
-    await _pendingBox.put(task.id, {
+  Future<void> deleteTask(AppTask task) => _serial(() async {
+    await _saveCache(_loadCache()..removeWhere((t) => t.id == task.id));
+    // A lost create response may have left a server record. Always reconcile a deletion.
+    await _pendingBox.put(_key(task.id), {
+      'owner': userId,
       'type': 'delete',
-      'task_id': task.id,
+      'task': task.toMap(),
     });
+    await _sync();
+  });
 
-    try {
-      await pb.collection(tasksCollection).delete(task.id);
-      await _pendingBox.delete(task.id);
-    } catch (error) {
-      debugPrint('Task deletion is waiting to sync: $error');
-    }
-  }
+  Future<void> syncPendingChanges() => _serial(_sync);
 
-  Future<void> syncPendingChanges() async {
-    final userId = _userId;
-    if (userId == null) return;
-
-    for (final key in List<dynamic>.from(_pendingBox.keys)) {
-      final change = _mapFromDynamic(_pendingBox.get(key));
-      if (change == null) continue;
-
+  Future<void> _sync() async {
+    for (final entry in _changes().toList()) {
+      final task = AppTask.fromMap(
+        Map<String, dynamic>.from(entry.value['task'] as Map),
+      );
       try {
-        switch (change['type']) {
-          case 'create':
-            await pb.collection(tasksCollection).create(
-              body: {
-                'title': change['title'],
-                'description': change['description'],
-                'priority': change['priority'] ?? 'normal',
-                'is_completed': change['is_completed'] ?? false,
-                'completed_at': change['completed_at'] ?? '',
-                'user': change['user'] ?? userId,
-              },
-            );
-            break;
-
-          case 'update':
-            await pb.collection(tasksCollection).update(
-              change['task_id'].toString(),
-              body: {
-                'title': change['title'],
-                'description': change['description'],
-                'priority': change['priority'] ?? 'normal',
-                'is_completed': change['is_completed'] ?? false,
-                'completed_at': change['completed_at'] ?? '',
-              },
-            );
-            break;
-
-          case 'delete':
-            await pb.collection(tasksCollection).delete(
-              change['task_id'].toString(),
-            );
-            break;
+        RecordModel? remote;
+        try {
+          remote = await _network(
+            () => pb.collection(tasksCollection).getOne(task.id),
+          );
+        } on ClientException catch (error) {
+          if (error.statusCode != 404) rethrow;
         }
-
-        await _pendingBox.delete(key);
+        if (remote != null && remote.getStringValue('user') != userId) {
+          throw StateError('Task ownership mismatch.');
+        }
+        switch (entry.value['type']) {
+          case 'create':
+            if (remote == null) {
+              remote = await _network(
+                () => pb
+                    .collection(tasksCollection)
+                    .create(
+                      body: {'id': task.id, ...task.toServerBody(userId!)},
+                    ),
+              );
+            } else {
+              // Stable record IDs make a retry after a lost response idempotent.
+              remote = await _network(
+                () => pb
+                    .collection(tasksCollection)
+                    .update(task.id, body: task.toServerBody(userId!)),
+              );
+            }
+            await _upsert(AppTask.fromRecord(remote!));
+            break;
+          case 'update':
+            if (remote == null) {
+              throw StateError(
+                'Task was deleted on another device; pending edit retained.',
+              );
+            }
+            await _network(
+              () => pb
+                  .collection(tasksCollection)
+                  .update(task.id, body: task.toServerBody(userId!)),
+            );
+            break;
+          case 'delete':
+            if (remote != null) {
+              await _network(
+                () => pb.collection(tasksCollection).delete(task.id),
+              );
+            }
+            break;
+          default:
+            throw StateError('Unknown pending change.');
+        }
+        await _pendingBox.delete(entry.key);
       } catch (error) {
-        debugPrint('Pending change could not sync yet: $error');
+        // Retain rejected and offline changes. Never silently discard unsynchronized data.
+        _checkSession();
+        if (error is TimeoutException ||
+            (error is ClientException &&
+                (error.statusCode == 0 || error.statusCode >= 500))) {
+          break;
+        }
       }
     }
-  }
-
-  Future<void> _saveCache(List<AppTask> tasks) async {
-    await _cacheBox.put(
-      'tasks',
-      tasks.map((task) => task.toMap()).toList(),
-    );
-  }
-
-  List<AppTask> _loadCache() {
-    final raw = _cacheBox.get('tasks');
-    if (raw is! List) return [];
-
-    return raw
-        .whereType<Map>()
-        .map((item) => AppTask.fromMap(Map<String, dynamic>.from(item)))
-        .toList();
-  }
-
-  Future<void> _upsertCacheTask(AppTask task) async {
-    final tasks = _loadCache();
-    final index = tasks.indexWhere((item) => item.id == task.id);
-
-    if (index == -1) {
-      tasks.add(task);
-    } else {
-      tasks[index] = task;
-    }
-
-    await _saveCache(tasks);
-  }
-
-  Future<void> _removeCacheTask(String id) async {
-    final tasks = _loadCache()..removeWhere((task) => task.id == id);
-    await _saveCache(tasks);
-  }
-
-  Map<String, dynamic>? _mapFromDynamic(dynamic value) {
-    if (value is! Map) return null;
-    return Map<String, dynamic>.from(value);
   }
 }
 
@@ -417,16 +567,14 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      await pb.collection(usersCollection).authWithPassword(
+      await pb
+          .collection(usersCollection)
+          .authWithPassword(
             _emailController.text.trim(),
             _passwordController.text,
           );
 
       if (!mounted) return;
-
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const TaskScreen()),
-      );
     } catch (error) {
       debugPrint('Login error: $error');
       if (!mounted) return;
@@ -462,10 +610,7 @@ class _LoginScreenState extends State<LoginScreen> {
               children: [
                 const Text(
                   'Log in',
-                  style: TextStyle(
-                    fontSize: 30,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 24),
                 TextField(
@@ -520,7 +665,7 @@ class TaskScreen extends StatefulWidget {
   State<TaskScreen> createState() => _TaskScreenState();
 }
 
-class _TaskScreenState extends State<TaskScreen> {
+class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
   final _repository = TaskRepository();
 
   late final ConfettiController _confettiController;
@@ -529,6 +674,8 @@ class _TaskScreenState extends State<TaskScreen> {
   bool _isLoading = true;
   bool _showCelebrationGif = false;
   int _celebrationGeneration = 0;
+  Timer? _syncTimer;
+  bool _syncing = false;
 
   @override
   void initState() {
@@ -536,24 +683,48 @@ class _TaskScreenState extends State<TaskScreen> {
     _confettiController = ConfettiController(
       duration: const Duration(milliseconds: 1800),
     );
+    WidgetsBinding.instance.addObserver(this);
+    _syncTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _initialize(),
+    );
     _initialize();
   }
 
-  Future<void> _initialize() async {
-    await _repository.syncPendingChanges();
-    await _reloadTasks();
-    await _subscribeToTasks();
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _initialize();
   }
 
-  Future<void> _subscribeToTasks() async {
-    await pb.collection(tasksCollection).subscribe(
-      '*',
-      (_) => _reloadTasks(),
-    );
+  Future<void> _initialize() async {
+    if (_syncing) return;
+    _syncing = true;
+    try {
+      await _repository.syncPendingChanges();
+      await _reloadTasks();
+      if (mounted) {
+        try {
+          await pb
+              .collection(tasksCollection)
+              .subscribe('*', (_) => _reloadTasks());
+        } catch (_) {
+          /* Timer and resume retry while offline. */
+        }
+      }
+    } catch (_) {
+      if (mounted) setState(() => _isLoading = false);
+    } finally {
+      _syncing = false;
+    }
   }
 
   Future<void> _reloadTasks() async {
-    final tasks = await _repository.loadTasks();
+    List<AppTask> tasks;
+    try {
+      tasks = await _repository.loadTasks();
+    } catch (_) {
+      return;
+    }
     if (!mounted) return;
 
     setState(() {
@@ -566,8 +737,9 @@ class _TaskScreenState extends State<TaskScreen> {
     final sorted = List<AppTask>.from(tasks);
 
     sorted.sort((a, b) {
-      final priorityCompare =
-          a.priority.sortOrder.compareTo(b.priority.sortOrder);
+      final priorityCompare = a.priority.sortOrder.compareTo(
+        b.priority.sortOrder,
+      );
 
       if (priorityCompare != 0) return priorityCompare;
 
@@ -597,10 +769,19 @@ class _TaskScreenState extends State<TaskScreen> {
 
   Future<void> _showTaskDialog({AppTask? task}) async {
     final titleController = TextEditingController(text: task?.title ?? '');
-    final descriptionController =
-        TextEditingController(text: task?.description ?? '');
+    final descriptionController = TextEditingController(
+      text: task?.description ?? '',
+    );
 
     var selectedPriority = task?.priority ?? TaskPriority.normal;
+    final dueController = TextEditingController(text: task?.dueAt ?? '');
+    final durationController = TextEditingController(
+      text: (task?.estimatedMinutes ?? 0).toString(),
+    );
+    final categoryController = TextEditingController(
+      text: task?.category ?? '',
+    );
+    String? metadataError;
 
     final result = await showDialog<_TaskFormResult>(
       context: context,
@@ -634,7 +815,7 @@ class _TaskScreenState extends State<TaskScreen> {
                       ),
                       const SizedBox(height: 16),
                       DropdownButtonFormField<TaskPriority>(
-                        value: selectedPriority,
+                        initialValue: selectedPriority,
                         decoration: const InputDecoration(
                           labelText: 'Priority',
                           border: OutlineInputBorder(),
@@ -652,6 +833,78 @@ class _TaskScreenState extends State<TaskScreen> {
                           setDialogState(() => selectedPriority = priority);
                         },
                       ),
+                      if (const bool.fromEnvironment(
+                        'TASK_SCHEDULING_ENABLED',
+                      )) ...[
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                icon: const Icon(Icons.event_outlined),
+                                label: Text(
+                                  dueController.text.isEmpty
+                                      ? 'Choose due date (optional)'
+                                      : 'Due: ${DateTime.tryParse(dueController.text)?.toLocal() ?? dueController.text}',
+                                ),
+                                onPressed: () async {
+                                  final now = DateTime.now();
+                                  final current =
+                                      DateTime.tryParse(dueController.text)
+                                          ?.toLocal() ??
+                                      now;
+                                  final selected = await showDatePicker(
+                                    context: context,
+                                    initialDate: current,
+                                    firstDate: DateTime(2000),
+                                    lastDate: DateTime(2100),
+                                  );
+                                  if (selected == null || !context.mounted) {
+                                    return;
+                                  }
+                                  final time = await showTimePicker(
+                                    context: context,
+                                    initialTime: TimeOfDay.fromDateTime(
+                                      current,
+                                    ),
+                                  );
+                                  if (time == null || !context.mounted) return;
+                                  setDialogState(
+                                    () => dueController.text = DateTime(
+                                      selected.year,
+                                      selected.month,
+                                      selected.day,
+                                      time.hour,
+                                      time.minute,
+                                    ).toUtc().toIso8601String(),
+                                  );
+                                },
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Clear due date',
+                              onPressed: () =>
+                                  setDialogState(() => dueController.clear()),
+                              icon: const Icon(Icons.clear),
+                            ),
+                          ],
+                        ),
+                        TextField(
+                          controller: durationController,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'Estimated minutes (0 if unknown)',
+                          ),
+                        ),
+                        TextField(
+                          controller: categoryController,
+                          maxLength: 80,
+                          decoration: const InputDecoration(
+                            labelText: 'Category',
+                          ),
+                        ),
+                        if (metadataError != null) Text(metadataError!),
+                      ],
                     ],
                   ),
                 ),
@@ -669,10 +922,32 @@ class _TaskScreenState extends State<TaskScreen> {
                     final title = titleController.text.trim();
                     if (title.isEmpty) return;
 
+                    final due = dueController.text.trim();
+                    final minutes = int.tryParse(durationController.text);
+                    if (const bool.fromEnvironment('TASK_SCHEDULING_ENABLED')) {
+                      final parsed = DateTime.tryParse(due);
+                      if ((due.isNotEmpty &&
+                              (parsed == null ||
+                                  !RegExp(r'(Z|[+-]\d{2}:\d{2})$')
+                                      .hasMatch(due))) ||
+                          minutes == null ||
+                          minutes < 0 ||
+                          minutes > 10080) {
+                        setDialogState(
+                          () => metadataError = 'Choose a due date and enter a duration from 0 to 10080 minutes.',
+                        );
+                        return;
+                      }
+                    }
                     final result = _TaskFormResult(
                       title: title,
                       description: descriptionController.text.trim(),
                       priority: selectedPriority,
+                      dueAt: due.isEmpty
+                          ? ''
+                          : DateTime.parse(due).toUtc().toIso8601String(),
+                      estimatedMinutes: minutes ?? 0,
+                      category: categoryController.text.trim(),
                     );
 
                     FocusScope.of(dialogContext).unfocus();
@@ -690,6 +965,9 @@ class _TaskScreenState extends State<TaskScreen> {
     await Future<void>.delayed(const Duration(milliseconds: 100));
     titleController.dispose();
     descriptionController.dispose();
+    dueController.dispose();
+    durationController.dispose();
+    categoryController.dispose();
 
     if (result == null || !mounted) return;
 
@@ -698,6 +976,9 @@ class _TaskScreenState extends State<TaskScreen> {
         title: result.title,
         description: result.description,
         priority: result.priority,
+        dueAt: result.dueAt,
+        estimatedMinutes: result.estimatedMinutes,
+        category: result.category,
       );
 
       if (!mounted) return;
@@ -709,6 +990,9 @@ class _TaskScreenState extends State<TaskScreen> {
       title: result.title,
       description: result.description,
       priority: result.priority,
+      dueAt: result.dueAt,
+      estimatedMinutes: result.estimatedMinutes,
+      category: result.category,
     );
 
     _replaceTask(updated);
@@ -718,9 +1002,7 @@ class _TaskScreenState extends State<TaskScreen> {
   Future<void> _toggleTask(AppTask task, bool isCompleted) async {
     final updated = task.copyWith(
       isCompleted: isCompleted,
-      completedAt: isCompleted
-          ? DateTime.now().toUtc().toIso8601String()
-          : '',
+      completedAt: isCompleted ? DateTime.now().toUtc().toIso8601String() : '',
     );
 
     // Update the checkbox first so the UI responds instantly.
@@ -747,13 +1029,10 @@ class _TaskScreenState extends State<TaskScreen> {
 
     setState(() => _showCelebrationGif = true);
 
-    Future<void>.delayed(
-      const Duration(milliseconds: 1800),
-      () {
-        if (!mounted || generation != _celebrationGeneration) return;
-        setState(() => _showCelebrationGif = false);
-      },
-    );
+    Future<void>.delayed(const Duration(milliseconds: 1800), () {
+      if (!mounted || generation != _celebrationGeneration) return;
+      setState(() => _showCelebrationGif = false);
+    });
   }
 
   Future<void> _deleteTaskWithUndo(AppTask task) async {
@@ -799,7 +1078,9 @@ class _TaskScreenState extends State<TaskScreen> {
 
   @override
   void dispose() {
-    pb.collection(tasksCollection).unsubscribe('*');
+    _syncTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    pb.collection(tasksCollection).unsubscribe('*').catchError((_) {});
     _confettiController.dispose();
     super.dispose();
   }
@@ -809,7 +1090,34 @@ class _TaskScreenState extends State<TaskScreen> {
     return Stack(
       children: [
         Scaffold(
-          appBar: AppBar(title: const Text('My Tasks')),
+          appBar: AppBar(
+            title: const Text('My Tasks'),
+            actions: [
+              IconButton(
+                tooltip: 'AI Assistant',
+                icon: const Icon(Icons.auto_awesome),
+                onPressed: () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          AssistantScreen(client: AssistantClient(pb)),
+                    ),
+                  );
+                  if (mounted) await _initialize();
+                },
+              ),
+              IconButton(
+                tooltip: 'Sync tasks',
+                icon: const Icon(Icons.sync),
+                onPressed: _initialize,
+              ),
+              IconButton(
+                tooltip: 'Sign out',
+                icon: const Icon(Icons.logout),
+                onPressed: () => pb.authStore.clear(),
+              ),
+            ],
+          ),
           body: _isLoading
               ? const Center(child: CircularProgressIndicator())
               : Column(
@@ -890,11 +1198,16 @@ class _TaskFormResult {
     required this.title,
     required this.description,
     required this.priority,
+    required this.dueAt,
+    required this.estimatedMinutes,
+    required this.category,
   });
-
   final String title;
   final String description;
   final TaskPriority priority;
+  final String dueAt;
+  final int estimatedMinutes;
+  final String category;
 }
 
 class _ProgressHeader extends StatelessWidget {
@@ -926,10 +1239,7 @@ class _ProgressHeader extends StatelessWidget {
               tween: Tween(begin: 0, end: progress),
               duration: const Duration(milliseconds: 400),
               builder: (context, value, _) {
-                return LinearProgressIndicator(
-                  value: value,
-                  minHeight: 14,
-                );
+                return LinearProgressIndicator(value: value, minHeight: 14);
               },
             ),
           ),
@@ -978,13 +1288,23 @@ class _TaskTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (task.description.isNotEmpty) Text(task.description),
+                if (task.dueAt.isNotEmpty)
+                  Text(
+                    'Due: ${DateTime.tryParse(task.dueAt)?.toLocal() ?? task.dueAt}',
+                  ),
+                if (task.estimatedMinutes > 0)
+                  Text('${task.estimatedMinutes} min estimated'),
+                if (task.category.isNotEmpty) Text(task.category),
+                if (task.scheduledAt.isNotEmpty)
+                  Text(
+                    'Scheduled: ${DateTime.tryParse(task.scheduledAt)?.toLocal() ?? task.scheduledAt}',
+                  ),
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
                     task.priority.label,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
+                    style: Theme.of(context).textTheme.bodySmall
+                        ?.copyWith(fontWeight: FontWeight.w600),
                   ),
                 ),
               ],
