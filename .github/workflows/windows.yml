@@ -1,0 +1,45 @@
+name: Windows download
+
+on:
+  push:
+    branches: [main, feature/ai-assistant-sahur]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.2'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - name: Build Windows application
+        run: flutter build windows --release --dart-define=AI_BACKEND_URL=http://127.0.0.1:18080
+      - name: Package app and usage instructions
+        shell: pwsh
+        run: |
+          $release = 'build/windows/x64/runner/Release'
+          if (!(Test-Path "$release/sync_task_app.exe")) { throw 'Windows executable is missing' }
+          Copy-Item docs/WINDOWS.md "$release/README.md"
+          Compress-Archive -Path "$release/*" -DestinationPath Sync-Task-Windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sync-Task-Windows-x64
+          path: Sync-Task-Windows-x64.zip
+          retention-days: 30
+          if-no-files-found: error

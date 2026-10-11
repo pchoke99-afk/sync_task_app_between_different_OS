@@ -5,8 +5,11 @@
 #include <flutter/flutter_view_controller.h>
 
 #include <memory>
+#include <flutter/method_channel.h>
+#include <flutter/encodable_value.h>
 
 #include "win32_window.h"
+#include "assistant_media.h"
 
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
@@ -25,6 +28,8 @@ class FlutterWindow : public Win32Window {
  private:
   // The project to run.
   flutter::DartProject project_;
+
+  std::unique_ptr<AssistantMedia> assistant_media_;
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
