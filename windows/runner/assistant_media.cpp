@@ -3,6 +3,7 @@
 #include <shellapi.h>
 #include <gdiplus.h>
 #include <objidl.h>
+#include <coroutine>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Graphics.Imaging.h>
 #include <winrt/Windows.Media.Ocr.h>
@@ -174,7 +175,7 @@ bool AssistantMedia::HandleMessage(UINT message, WPARAM wparam) {
       if (event.eEventId == SPEI_RECOGNITION) {
         auto* recognition = reinterpret_cast<ISpRecoResult*>(event.lParam);
         wchar_t* text = nullptr;
-        if (SUCCEEDED(recognition->GetText(SP_GETWHOLEPHRASE, SP_GETWHOLEPHRASE, TRUE, &text, nullptr))) {
+        if (SUCCEEDED(recognition->GetText(static_cast<ULONG>(SP_GETWHOLEPHRASE), static_cast<ULONG>(SP_GETWHOLEPHRASE), TRUE, &text, nullptr))) {
           if (!transcript_.empty()) transcript_ += " ";
           transcript_ += Utf8(text); CoTaskMemFree(text);
         }
