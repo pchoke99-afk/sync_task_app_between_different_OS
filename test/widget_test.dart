@@ -27,8 +27,9 @@ void main() {
         tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
           channel,
           (call) async {
-            if (call.method == 'startSpeech')
+            if (call.method == 'startSpeech') {
               return 'Add a task to study circuits';
+            }
             return null;
           },
         );
