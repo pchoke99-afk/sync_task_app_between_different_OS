@@ -17,40 +17,45 @@ void main() {
   setUpAll(() {
     pb = PocketBase('http://localhost');
   });
-  testWidgets('Mac dictation creates a draft without sending a request', (
-    tester,
-  ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
-    addTearDown(() => debugDefaultTargetPlatformOverride = null);
-    const channel = MethodChannel('sync_task/assistant_media');
-    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
-      call,
-    ) async {
-      if (call.method == 'startSpeech') return 'Add a task to study circuits';
-      return null;
-    });
-    addTearDown(
-      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        channel,
-        null,
-      ),
+  for (final platform in [TargetPlatform.macOS, TargetPlatform.windows]) {
+    testWidgets(
+      '$platform dictation creates a draft without sending a request',
+      (tester) async {
+        debugDefaultTargetPlatformOverride = platform;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        const channel = MethodChannel('sync_task/assistant_media');
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          (call) async {
+            if (call.method == 'startSpeech')
+              return 'Add a task to study circuits';
+            return null;
+          },
+        );
+        addTearDown(
+          () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            channel,
+            null,
+          ),
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            home: AssistantScreen(client: AssistantClient(pb, endpoint: '')),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('Dictate message'));
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<TextField>(find.byType(TextField)).controller!.text,
+          'Add a task to study circuits',
+        );
+        expect(find.text('You'), findsNothing);
+        await tester.pumpWidget(const SizedBox.shrink());
+        debugDefaultTargetPlatformOverride = null;
+      },
     );
-    await tester.pumpWidget(
-      MaterialApp(
-        home: AssistantScreen(client: AssistantClient(pb, endpoint: '')),
-      ),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Dictate message'));
-    await tester.pumpAndSettle();
-    expect(
-      tester.widget<TextField>(find.byType(TextField)).controller!.text,
-      'Add a task to study circuits',
-    );
-    expect(find.text('You'), findsNothing);
-    await tester.pumpWidget(const SizedBox.shrink());
-    debugDefaultTargetPlatformOverride = null;
-  });
+  }
 
   testWidgets('Signed-out app shows working login form', (tester) async {
     await tester.pumpWidget(const SyncTaskApp());

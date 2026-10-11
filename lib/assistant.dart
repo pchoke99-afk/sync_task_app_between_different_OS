@@ -147,7 +147,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
                   ),
                   const SizedBox(height: 12),
                   const Text(
-                    'Credentials and Google tokens are stored in your Mac Keychain. Only busy times are shared with your local assistant.',
+                    'Credentials and Google tokens are stored securely on this device. Only busy times are shared with your local assistant.',
                   ),
                 ],
               ),
@@ -185,7 +185,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Google Calendar connected'),
         content: const Text(
-          'Sahur uses busy times from your primary calendar for the next 14 days. Event titles and Google tokens are not shared. Disconnect removes this task account’s saved Google tokens from the Mac.',
+          'Sahur uses busy times from your primary calendar for the next 14 days. Event titles and Google tokens are not shared. Disconnect removes this task account’s saved Google tokens from this device.',
         ),
         actions: [
           TextButton(
