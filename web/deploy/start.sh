@@ -18,6 +18,7 @@ case "$serve_config" in
 esac
 sudo docker compose -p sync-task-web config --quiet
 sudo docker compose -p sync-task-web build web
+sudo docker compose -p sync-task-web run --rm --no-deps web -t
 sudo docker compose -p sync-task-web up -d --no-deps web
 attempt=0
 until curl --fail --silent --output /dev/null http://127.0.0.1:8081/; do

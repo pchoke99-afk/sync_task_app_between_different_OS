@@ -30,6 +30,10 @@ jobs:
       - run: npm test
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run build
+      - name: Validate unprivileged Nginx configuration
+        run: |
+          docker build -f deploy/Dockerfile -t sync-task-web-check .
+          docker run --rm --read-only --tmpfs /tmp:uid=101,gid=101,mode=700 sync-task-web-check -t
       - name: Package Ubuntu deployment
         run: tar -czf ../Sync-Task-Web.tar.gz dist deploy compose.yaml .dockerignore
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
