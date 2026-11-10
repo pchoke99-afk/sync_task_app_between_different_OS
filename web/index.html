@@ -17,7 +17,7 @@
       content="Your tasks, in sync. A private task manager with an AI planning assistant."
     />
     <title>Halo Sync</title>
-    <meta name="apple-mobile-web-app-title" content="Halo Sync">
+    <meta name="apple-mobile-web-app-title" content="Halo Sync" />
     <link rel="icon" href="./icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="./icon-192.png" />
     <link rel="manifest" href="./manifest.webmanifest" />
@@ -43,6 +43,13 @@
             autocomplete="current-password"
             required
         /></label>
+        <label class="remember-option"
+          ><input id="remember-me" type="checkbox" />
+          <span>Remember me on this device</span></label
+        >
+        <p class="remember-help small muted">
+          Use this on your personal device. Your password is never saved.
+        </p>
         <button class="primary" type="submit">
           Sign in <span aria-hidden="true">→</span>
         </button>

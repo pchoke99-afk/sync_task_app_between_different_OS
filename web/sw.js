@@ -6,6 +6,7 @@ const SHELL = [
   "/src/app.js",
   "/src/tasks.js",
   "/src/calendar.js",
+  "/src/browser_session.js",
   "/icon.svg",
   "/icon-192.png",
   "/icon-512.png",

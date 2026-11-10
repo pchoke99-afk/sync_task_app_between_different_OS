@@ -6,7 +6,7 @@
   "scripts": {
     "build": "node build.mjs",
     "test": "node --test test/*.test.js",
-    "check": "node --check src/app.js && node --check src/tasks.js && node --check src/calendar.js && node --check sw.js"
+    "check": "node --check src/app.js && node --check src/tasks.js && node --check src/calendar.js && node --check src/browser_session.js && node --check sw.js"
   },
   "dependencies": {
     "@tesseract.js-data/eng": "1.0.0",

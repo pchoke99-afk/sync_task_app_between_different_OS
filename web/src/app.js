@@ -1,5 +1,15 @@
 import { TaskStore, newRecordId } from "./tasks.js";
 import { Calendar } from "./calendar.js";
+import {
+  BrowserSessionStore,
+  browserStorage,
+  REMEMBER_KEY,
+} from "./browser_session.js";
+
+const browserSession = new BrowserSessionStore({
+  persistent: browserStorage("localStorage"),
+  transient: browserStorage("sessionStorage"),
+});
 
 const $ = (selector) => document.querySelector(selector);
 const state = {
@@ -63,16 +73,17 @@ async function confirmAction(title, details) {
     ),
   );
 }
-function saveSession(session) {
+function saveSession(session, remember = browserSession.remember) {
   state.session = session;
-  // Never persist a password or a Google token. Session storage is cleared on tab closure.
   try {
-    sessionStorage.setItem("sync-task-session", JSON.stringify(session));
-  } catch {
-    toast("This browser cannot remember sign-in. Keep this tab open.");
+    browserSession.save(session, remember);
+  } catch (error) {
+    toast(error.message);
   }
 }
+
 function logout() {
+  const signedOutUser = state.session?.record?.id;
   state.epoch++;
   for (const controller of requestControllers) controller.abort();
   state.recognition?.abort();
@@ -91,11 +102,8 @@ function logout() {
   $("#message").value = "";
   $("#messages").replaceChildren();
   $("#tasks").replaceChildren();
-  try {
-    sessionStorage.removeItem("sync-task-session");
-  } catch {
-    /* Memory-only session. */
-  }
+  browserSession.clear(signedOutUser);
+  $("#remember-me").checked = false;
   document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
   $("#task-view").hidden = true;
   $("#login-view").hidden = false;
@@ -179,8 +187,8 @@ async function api(
   }
 }
 
-function enterApp(session) {
-  saveSession(session);
+function enterApp(session, remember = browserSession.remember) {
+  saveSession(session, remember);
   const epoch = state.epoch;
   state.store = new TaskStore(session.record.id, (path, options) => {
     if (state.epoch !== epoch) throw new Error("Account changed.");
@@ -709,7 +717,7 @@ $("#login-form").addEventListener("submit", async (event) => {
       },
     });
     $("#password").value = "";
-    enterApp(session);
+    enterApp(session, $("#remember-me").checked);
   } catch (error) {
     errorAt("#login-error", error);
   } finally {
@@ -968,24 +976,34 @@ window.addEventListener("beforeunload", (event) => {
 });
 if ("serviceWorker" in navigator && isSecureContext)
   navigator.serviceWorker.register("/sw.js").catch(() => {});
-try {
-  const saved = JSON.parse(
-    sessionStorage.getItem("sync-task-session") || "null",
-  );
-  if (saved?.token && /^[a-z0-9]{15}$/.test(saved.record?.id ?? "")) {
-    saveSession(saved);
-    refreshSession()
-      .then(() => {
-        if (state.session) enterApp(state.session);
-      })
-      .catch((error) => {
-        if (!navigator.onLine && state.session) enterApp(state.session);
-        else errorAt("#login-error", error);
-      });
-  }
-} catch {
-  /* Start with a fresh sign-in if session storage is unavailable. */
+const savedSession = browserSession.load();
+if (savedSession) {
+  state.session = savedSession;
+  $("#remember-me").checked = browserSession.remember;
+  refreshSession()
+    .then(() => {
+      if (state.session) enterApp(state.session);
+    })
+    .catch((error) => {
+      if (!navigator.onLine && state.session) enterApp(state.session);
+      else errorAt("#login-error", error);
+    });
 }
+// Signing out a remembered account also signs that account out in other open tabs.
+window.addEventListener("storage", (event) => {
+  if (event.key !== REMEMBER_KEY || !state.session || !browserSession.remember)
+    return;
+  if (event.newValue === null) {
+    logout();
+    return;
+  }
+  try {
+    const saved = JSON.parse(event.newValue);
+    if (saved.session?.record?.id !== state.session.record.id) logout();
+  } catch {
+    logout();
+  }
+});
 
 $("#export-edits").addEventListener("click", () => {
   if (!state.store) return;

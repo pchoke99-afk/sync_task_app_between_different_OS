@@ -888,3 +888,22 @@ dialog::backdrop {
     scroll-behavior: auto !important;
   }
 }
+
+.remember-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  min-height: 34px;
+}
+.remember-option input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--blue);
+}
+.login-card .remember-help {
+  margin: 4px 0 16px;
+  font-size: 11px;
+}

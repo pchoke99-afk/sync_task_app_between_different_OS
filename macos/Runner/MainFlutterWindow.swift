@@ -16,6 +16,7 @@ class MainFlutterWindow: NSWindow {
     assistantMedia = AssistantMediaBridge(messenger: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
+    self.title = "Halo Sync"
   }
 }
 
