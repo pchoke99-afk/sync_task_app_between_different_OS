@@ -30,4 +30,8 @@ OAuth JSON, `.env`, tokens, database exports, and local build directories are ex
 
 ## iPhone
 
-The user declined paid Apple Developer enrollment. No payment or TestFlight upload was performed. Existing bundle identifiers were retained; free development signing requires periodic renewal. [iPhone signing reference](TESTFLIGHT.md).
+The user declined paid Apple Developer enrollment. No payment or TestFlight upload was performed. The native iOS target has since been retired in favor of the HTML browser app, which does not need signing or periodic renewal. [Browser setup](WEB.md).
+
+## Browser app and Halo (November 2026)
+
+The native iOS source is removed. `web/` provides a standalone HTML/CSS/JavaScript frontend using the existing PocketBase/AI service, with a private Tailscale HTTPS reverse proxy. Desktop builds now use the shared dark navy theme and a smaller animated Halo launcher. Dancing GIF and unused animation dependencies are removed; confetti remains. See [web deployment and browser limitations](WEB.md).

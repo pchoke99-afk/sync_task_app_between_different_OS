@@ -1,6 +1,14 @@
 # Sync Task App
 
-A Flutter task manager for desktop and mobile, synchronized through PocketBase. Tung Tung Sahur helps create and update tasks using a self-hosted Ollama chatbot; changes are proposed for review and require confirmation before saving.
+A task manager for desktop and browsers, synchronized through PocketBase. Halo helps create and update tasks using a self-hosted Ollama chatbot; changes are proposed for review and require confirmation before saving.
+
+## iPhone and browser app
+
+The iPhone version is now an **HTML/JavaScript web app** in `web/`. Open it in Safari or add it to your Home Screen, with no iOS signing or seven-day renewal. Native iOS source has been retired; desktop apps remain available.
+
+[Browser setup, private Ubuntu hosting, and Google Calendar](docs/WEB.md).
+
+The app uses a dark navy theme, a smaller **Halo** launcher with three glowing blue rings and hover animation, and confetti when tasks are completed.
 
 ## Windows download
 
@@ -31,7 +39,7 @@ The default PocketBase address is `http://100.117.123.116:8090`, reachable throu
 
 ## Assistant and Calendar
 
-- A floating Sahur mascot opens chat; approved proposals create, update, complete, or delete tasks.
+- A floating Halo ring button opens chat; approved proposals create, update, complete, or delete tasks.
 - Ubuntu runs only the Python assistant backend and Ollama. The current local model is `qwen2.5:3b`; no paid AI API key is required. CPU inference may take several minutes.
 - Google Calendar uses **Desktop OAuth**, not an API key. It reads only primary-calendar busy times for 14 days. Google credentials and tokens stay in each desktop's secure storage; only validated busy intervals are sent to the assistant.
 - Mac dictation uses on-device speech recognition; image paste uses local OCR and sends extracted text, not images. The current model is not a vision model.
@@ -66,5 +74,5 @@ Backend tests isolate fake task data and temporary history. Real PocketBase inte
 
 - [Deployment and migration guidance](docs/AI_DEPLOYMENT.md)
 - [Implementation status](docs/IMPLEMENTATION_STATUS.md)
-- [Free iPhone signing](docs/TESTFLIGHT.md)
+- [iPhone browser app and hosting](docs/WEB.md)
 - [Flutter Windows packaging](https://docs.flutter.dev/platform-integration/windows/building)

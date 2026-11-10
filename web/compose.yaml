@@ -1,0 +1,22 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    # Linux only. Nginx listens on loopback; Tailscale Serve supplies private HTTPS.
+    network_mode: host
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,uid=101,gid=101,mode=700
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
