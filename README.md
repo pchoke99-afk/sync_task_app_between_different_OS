@@ -1,4 +1,4 @@
-# Sync Task App
+# Halo Sync
 
 A task manager for desktop and browsers, synchronized through PocketBase. Halo helps create and update tasks using a self-hosted Ollama chatbot; changes are proposed for review and require confirmation before saving.
 

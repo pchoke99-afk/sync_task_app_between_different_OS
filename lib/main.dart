@@ -68,7 +68,7 @@ class SyncTaskApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Sync Task App',
+      title: 'Halo Sync',
       debugShowCheckedModeBanner: false,
       theme: appTheme,
       home: SessionGate(
@@ -599,7 +599,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Sync Task App')),
+      appBar: AppBar(title: const Text('Halo Sync')),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 400),
