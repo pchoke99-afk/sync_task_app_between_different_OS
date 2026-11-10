@@ -1,9 +1,9 @@
 :root {
   color-scheme: dark;
-  --bg: #0c121c;
-  --surface: #121d2b;
-  --surface-2: #192638;
-  --border: #293a50;
+  --bg: #000000;
+  --surface: #0d0d0f;
+  --surface-2: #19191c;
+  --border: #2b2b30;
   --text: #edf3fc;
   --muted: #a1b1c7;
   --blue: #9dc5ff;
@@ -167,8 +167,10 @@ p {
   font-size: 19px;
   font-weight: 650;
 }
-.brand:first-letter {
-  color: var(--cyan);
+.brand-logo {
+  width: 30px;
+  height: 30px;
+  display: block;
 }
 .toolbar {
   display: flex;
@@ -198,7 +200,7 @@ p {
   grid-template-columns: 1fr auto;
   align-items: center;
   gap: 18px;
-  background: linear-gradient(110deg, #172a40, #141e2e);
+  background: linear-gradient(110deg, #151519, #080809);
   border: 1px solid #2c425c;
   border-radius: 20px;
   padding: 25px 28px;
@@ -281,7 +283,7 @@ progress::-moz-progress-bar {
   padding: 18px 20px;
 }
 .task.done {
-  background: #101a26;
+  background: #09090b;
 }
 .task.done .task-title {
   text-decoration: line-through;
@@ -436,7 +438,7 @@ footer span {
   padding: 3px 18px 3px 3px;
   border: 1px solid #345074;
   border-radius: 999px;
-  background: #142438;
+  background: #0a0a0d;
   box-shadow: 0 8px 32px #0005;
   font-size: 12px;
 }
@@ -445,7 +447,7 @@ footer span {
   display: grid;
   place-items: center;
   padding: 32px 20px;
-  background: radial-gradient(ellipse at 50% 0, #182b45 0, transparent 65%);
+  background: radial-gradient(ellipse at 50% 0, #14141b 0, transparent 65%);
 }
 .login-card {
   width: 100%;
@@ -480,9 +482,9 @@ select {
   width: 100%;
   margin: 7px 0 0;
   padding: 12px 14px;
-  border: 1px solid #354861;
+  border: 1px solid #36363e;
   border-radius: 10px;
-  background: #172232;
+  background: #151517;
   color: var(--text);
   font-size: 16px;
 }
@@ -506,7 +508,7 @@ dialog {
   overscroll-behavior: contain;
 }
 dialog::backdrop {
-  background: #030812a8;
+  background: #000000b8;
   backdrop-filter: blur(5px);
 }
 .dialog-heading,
@@ -639,13 +641,13 @@ dialog::backdrop {
   margin-bottom: 12px;
   border: 1px solid var(--border);
   border-radius: 16px;
-  background: #172334;
+  background: #141417;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   font-size: 14px;
 }
 .message.user {
-  background: #203c5e;
+  background: #122237;
   border-color: #2d4d74;
   margin-left: 28px;
 }
@@ -659,7 +661,7 @@ dialog::backdrop {
   border: 1px solid #44688d;
   padding: 16px;
   border-radius: 16px;
-  background: #142a3e;
+  background: #101820;
   margin-bottom: 15px;
   font-size: 13px;
 }
@@ -699,7 +701,7 @@ dialog::backdrop {
 .composer {
   border-top: 1px solid var(--border);
   padding: 12px 16px max(12px, env(safe-area-inset-bottom));
-  background: #101a28;
+  background: #08080a;
   flex-shrink: 0;
 }
 .composer textarea {
