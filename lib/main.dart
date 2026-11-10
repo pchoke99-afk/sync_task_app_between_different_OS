@@ -7,6 +7,8 @@ import 'dart:async';
 import 'dart:math';
 
 import 'assistant.dart';
+import 'assistant_rings.dart';
+import 'app_theme.dart';
 import 'session.dart';
 
 const pocketBaseUrl = String.fromEnvironment(
@@ -33,6 +35,7 @@ Future<void> main() async {
   } catch (_) {
     runApp(
       MaterialApp(
+        theme: appTheme,
         home: Scaffold(
           body: Center(
             child: Padding(
@@ -67,10 +70,7 @@ class SyncTaskApp extends StatelessWidget {
     return MaterialApp(
       title: 'Sync Task App',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-        useMaterial3: true,
-      ),
+      theme: appTheme,
       home: SessionGate(
         client: pb,
         signedIn: const TaskScreen(),
@@ -672,8 +672,6 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
 
   List<AppTask> _tasks = [];
   bool _isLoading = true;
-  bool _showCelebrationGif = false;
-  int _celebrationGeneration = 0;
   Timer? _syncTimer;
   bool _syncing = false;
 
@@ -1024,15 +1022,6 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
     _confettiController
       ..stop()
       ..play();
-
-    final generation = ++_celebrationGeneration;
-
-    setState(() => _showCelebrationGif = true);
-
-    Future<void>.delayed(const Duration(milliseconds: 1800), () {
-      if (!mounted || generation != _celebrationGeneration) return;
-      setState(() => _showCelebrationGif = false);
-    });
   }
 
   Future<void> _deleteTaskWithUndo(AppTask task) async {
@@ -1073,9 +1062,6 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
   int get _completedTaskCount =>
       _tasks.where((task) => task.isCompleted).length;
 
-  double get _completionProgress =>
-      _tasks.isEmpty ? 0 : _completedTaskCount / _tasks.length;
-
   @override
   void dispose() {
     _syncTimer?.cancel();
@@ -1087,6 +1073,7 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    final completed = _completedTaskCount;
     return Stack(
       children: [
         Scaffold(
@@ -1110,9 +1097,9 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
               : Column(
                   children: [
                     _ProgressHeader(
-                      completed: _completedTaskCount,
+                      completed: completed,
                       total: _tasks.length,
-                      progress: _completionProgress,
+                      progress: _tasks.isEmpty ? 0 : completed / _tasks.length,
                     ),
                     const Divider(height: 1),
                     Expanded(
@@ -1124,6 +1111,7 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
                                 final task = _tasks[index];
 
                                 return _TaskTile(
+                                  key: ValueKey(task.id),
                                   task: task,
                                   onChanged: (value) {
                                     if (value == null) return;
@@ -1141,10 +1129,10 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
             mainAxisSize: MainAxisSize.min,
             children: [
               Tooltip(
-                message: 'Chat with Tung Tung Sahur',
+                message: 'Chat with Halo',
                 child: Semantics(
                   button: true,
-                  label: 'Chat with Tung Tung Sahur',
+                  label: 'Chat with Halo',
                   child: InkWell(
                     borderRadius: BorderRadius.circular(24),
                     onTap: () async {
@@ -1167,15 +1155,7 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
                       );
                       if (mounted) await _initialize();
                     },
-                    child: SizedBox(
-                      width: 80,
-                      height: 104,
-                      child: Image.asset(
-                        'assets/assistant/tung_tung_sahur.png',
-                        fit: BoxFit.contain,
-                        excludeFromSemantics: true,
-                      ),
-                    ),
+                    child: const AssistantRings(size: 52, animateOnHover: true),
                   ),
                 ),
               ),
@@ -1206,20 +1186,6 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
             ),
           ),
         ),
-
-        if (_showCelebrationGif)
-          Positioned.fill(
-            child: IgnorePointer(
-              child: Center(
-                child: Image.asset(
-                  'assets/animations/tungtungscuba.gif',
-                  width: 260,
-                  fit: BoxFit.contain,
-                  gaplessPlayback: true,
-                ),
-              ),
-            ),
-          ),
       ],
     );
   }
@@ -1288,6 +1254,7 @@ class _ProgressHeader extends StatelessWidget {
 
 class _TaskTile extends StatelessWidget {
   const _TaskTile({
+    super.key,
     required this.task,
     required this.onChanged,
     required this.onEdit,

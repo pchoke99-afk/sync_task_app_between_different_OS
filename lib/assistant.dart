@@ -9,9 +9,8 @@ import 'package:http/http.dart' as http;
 import 'package:pocketbase/pocketbase.dart';
 
 import 'assistant_media.dart';
+import 'assistant_rings.dart';
 import 'google_calendar.dart';
-
-const sahurMascotAsset = 'assets/assistant/tung_tung_sahur.png';
 
 const assistantUrl = String.fromEnvironment('AI_BACKEND_URL');
 String operationLabel(dynamic name) =>
@@ -185,7 +184,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Google Calendar connected'),
         content: const Text(
-          'Sahur uses busy times from your primary calendar for the next 14 days. Event titles and Google tokens are not shared. Disconnect removes this task account’s saved Google tokens from this device.',
+          'Halo uses busy times from your primary calendar for the next 14 days. Event titles and Google tokens are not shared. Disconnect removes this task account’s saved Google tokens from this device.',
         ),
         actions: [
           TextButton(
@@ -434,506 +433,481 @@ class _AssistantScreenState extends State<AssistantScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return _buildChat(context);
-  }
-
-  Widget _buildChat(BuildContext context) => Scaffold(
-    backgroundColor: Theme.of(context).colorScheme.surface,
-    appBar: AppBar(
+    return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surface,
-      leading: IconButton(
-        tooltip: 'Close chat',
-        icon: const Icon(Icons.close),
-        onPressed: () => Navigator.of(context).maybePop(),
-      ),
-      title: const Row(
-        children: [
-          _SahurAvatar(size: 40),
-          SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Tung Tung Sahur',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
-                ),
-                Text(
-                  'Your task assistant',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF625D6B)),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        IconButton(
-          tooltip: 'New conversation',
-          onPressed: _busy
-              ? null
-              : () => setState(() {
-                  _conversation = null;
-                  _messages = [];
-                  _proposals = [];
-                  _hasOlder = false;
-                }),
-          icon: const Icon(Icons.add_comment_outlined),
+      appBar: AppBar(
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        leading: IconButton(
+          tooltip: 'Close chat',
+          icon: const Icon(Icons.close),
+          onPressed: () => Navigator.of(context).maybePop(),
         ),
-      ],
-    ),
-    body: Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 900),
-        child: Column(
+        title: Row(
           children: [
-            if (_supportsCalendar)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
-                  child: TextButton.icon(
-                    icon: Icon(
-                      _calendarConnected
-                          ? Icons.event_available
-                          : Icons.calendar_month,
-                      size: 18,
-                    ),
-                    label: Text(
-                      _calendarConnected
-                          ? 'Calendar connected'
-                          : 'Connect Google Calendar',
-                    ),
-                    onPressed: _busy ? null : () => _run(_calendarSettings),
-                  ),
-                ),
-              ),
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Row(
+            AssistantRings(size: 40, active: _busy || _listening),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      key: ValueKey(_conversation),
-                      initialValue:
-                          _conversations.any((c) => c['id'] == _conversation)
-                          ? _conversation
-                          : null,
-                      decoration: const InputDecoration(
-                        labelText: 'Conversations',
-                        border: OutlineInputBorder(),
-                      ),
-                      items: _conversations
-                          .map(
-                            (c) => DropdownMenuItem(
-                              value: c['id'] as String,
-                              child: Text(
-                                c['title'] as String,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: _busy
-                          ? null
-                          : (id) {
-                              if (id != null) _run(() => _open(id));
-                            },
-                      isExpanded: true,
-                    ),
+                  Text(
+                    'Halo',
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
                   ),
-                  IconButton(
-                    tooltip: 'Refresh history',
-                    onPressed: _busy
-                        ? null
-                        : () => _run(() async {
-                            await _list();
-                            if (_conversation != null) {
-                              await _open(_conversation!);
-                            }
-                          }),
-                    icon: const Icon(Icons.refresh),
+                  Text(
+                    'Your task assistant',
+                    style: TextStyle(fontSize: 12, color: Color(0xFFACBCD0)),
                   ),
                 ],
-              ),
-            ),
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.all(12),
-                child: Text(
-                  _error!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              ),
-            if (_busy) ...[
-              const LinearProgressIndicator(),
-              const Padding(
-                padding: EdgeInsets.all(8),
-                child: Text(
-                  'Working on your request… local AI can take a few minutes.',
-                ),
-              ),
-            ],
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  if (_messages.isEmpty)
-                    Column(
-                      children: [
-                        const SizedBox(height: 8),
-                        Image.asset(
-                          sahurMascotAsset,
-                          height: 100,
-                          cacheWidth: 384,
-                          semanticLabel: 'Tung Tung Sahur, a smiling wooden character holding a bat',
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          'What can I help you with?',
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.titleLarge
-                              ?.copyWith(
-                                fontWeight: FontWeight.bold,
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
-                        ),
-                        const Padding(
-                          padding: EdgeInsets.symmetric(
-                            vertical: 14,
-                            horizontal: 12,
-                          ),
-                          child: Text(
-                            'Create tasks, update your plans, or choose what to work on next. You approve changes before they are saved.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Color(0xFF625D6B)),
-                          ),
-                        ),
-                        Wrap(
-                          alignment: WrapAlignment.center,
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            for (final suggestion in [
-                              'What should I work on today?',
-                              'Help me plan my study time',
-                              'Organize my tasks',
-                            ])
-                              ActionChip(
-                                label: Text(suggestion),
-                                avatar: const Icon(
-                                  Icons.auto_awesome,
-                                  size: 16,
-                                ),
-                                onPressed: _busy
-                                    ? null
-                                    : () => _input.text = suggestion,
-                              ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                      ],
-                    ),
-                  if (_hasOlder)
-                    TextButton(
-                      onPressed: _busy ? null : () => _run(_older),
-                      child: const Text('Load earlier messages'),
-                    ),
-                  ..._messages.map(
-                    (m) => Align(
-                      alignment: m['role'] == 'user'
-                          ? Alignment.centerRight
-                          : Alignment.centerLeft,
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 660),
-                        child: Card(
-                          color: m['role'] == 'user'
-                              ? Theme.of(context).colorScheme.primaryContainer
-                              : Theme.of(context)
-                                    .colorScheme
-                                    .surfaceContainerLow,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    if (m['role'] != 'user') ...[
-                                      const _SahurAvatar(size: 30),
-                                      const SizedBox(width: 8),
-                                    ],
-                                    Text(
-                                      m['role'] == 'user'
-                                          ? 'You'
-                                          : 'Tung Tung Sahur',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w600,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .primary,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 8),
-                                SelectableText(m['content'] as String),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  ..._proposals.map(
-                    (p) => Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Task changes • ${proposalStatus(p['status'])}',
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            ...(p['operations'] as List).map(
-                              (op) => Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 8,
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      '${operationLabel(op['name'])}: ${op['preview_title']}',
-                                    ),
-                                    if (op['arguments']['fields'] != null)
-                                      ...(op['arguments']['fields'] as Map)
-                                          .entries
-                                          .map(
-                                            (e) => Text(
-                                              '${fieldLabel(e.key)}: ${e.value.toString().isEmpty ? 'None' : e.value}',
-                                            ),
-                                          ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            if (p['status'] == 'pending')
-                              Wrap(
-                                spacing: 12,
-                                children: [
-                                  FilledButton(
-                                    onPressed: _busy
-                                        ? null
-                                        : () => _decide(p, true),
-                                    child: const Text('Review and apply'),
-                                  ),
-                                  TextButton(
-                                    onPressed: _busy
-                                        ? null
-                                        : () => _decide(p, false),
-                                    child: const Text('Cancel proposal'),
-                                  ),
-                                ],
-                              ),
-                            if (p['result'] != null)
-                              ...((p['result'] as Map)['results'] as List? ??
-                                      [])
-                                  .map(
-                                    (result) => Text(
-                                      result['ok'] == true
-                                          ? '${operationLabel(result['name'])}: done'
-                                          : result['error']?.toString() ?? 'This change could not be applied.',
-                                    ),
-                                  ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (_image != null)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Row(
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.memory(
-                        _image!,
-                        width: 64,
-                        height: 64,
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        _imageText.isEmpty
-                            ? 'Image attached · add a description'
-                            : 'Image attached · text extracted',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'Remove image',
-                      onPressed: () => setState(() {
-                        _image = null;
-                        _imageText = '';
-                      }),
-                      icon: const Icon(Icons.close),
-                    ),
-                  ],
-                ),
-              ),
-            if (_imageText.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: ExpansionTile(
-                  title: const Text('Review extracted text'),
-                  tilePadding: EdgeInsets.zero,
-                  children: [
-                    SizedBox(
-                      height: 100,
-                      child: SingleChildScrollView(
-                        child: SelectableText(_imageText),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            if (_listening)
-              const Padding(
-                padding: EdgeInsets.all(8),
-                child: Text('Listening… tap the microphone to finish.'),
-              ),
-            SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    if (_supportsMedia) ...[
-                      IconButton(
-                        tooltip: 'Paste image',
-                        onPressed: _busy || _mediaBusy ? null : _pasteImage,
-                        icon: const Icon(Icons.content_paste),
-                      ),
-                      IconButton(
-                        tooltip: _listening
-                            ? 'Finish recording'
-                            : 'Dictate message',
-                        onPressed: _busy ? null : _toggleMicrophone,
-                        icon: Icon(
-                          _listening ? Icons.stop_circle : Icons.mic_none,
-                        ),
-                        color: _listening
-                            ? Theme.of(context).colorScheme.error
-                            : null,
-                      ),
-                    ],
-                    Expanded(
-                      child: CallbackShortcuts(
-                        bindings: {
-                          if (_supportsMedia)
-                            SingleActivator(
-                              LogicalKeyboardKey.keyV,
-                              meta:
-                                  defaultTargetPlatform == TargetPlatform.macOS,
-                              control:
-                                  defaultTargetPlatform ==
-                                  TargetPlatform.windows,
-                            ): () async {
-                              final hasImage = await _media.hasClipboardImage();
-                              if (hasImage) {
-                                await _pasteImage();
-                              } else {
-                                final text = await Clipboard.getData(
-                                  Clipboard.kTextPlain,
-                                );
-                                if (mounted && text?.text != null) {
-                                  final selection = _input.selection;
-                                  final start = selection.isValid
-                                      ? selection.start
-                                      : _input.text.length;
-                                  final end = selection.isValid
-                                      ? selection.end
-                                      : start;
-                                  _input.value = TextEditingValue(
-                                    text: _input.text.replaceRange(
-                                      start,
-                                      end,
-                                      text!.text!,
-                                    ),
-                                    selection: TextSelection.collapsed(
-                                      offset: start + text.text!.length,
-                                    ),
-                                  );
-                                }
-                              }
-                            },
-                        },
-                        child: TextField(
-                          controller: _input,
-                          minLines: 1,
-                          maxLines: 5,
-                          maxLength: 4000,
-                          decoration: const InputDecoration(
-                            hintText: 'Ask Tung Tung Sahur…',
-                            border: OutlineInputBorder(),
-                          ),
-                          onSubmitted: (_) {
-                            if (!_listening && !_mediaBusy) _run(_send);
-                          },
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton.filled(
-                      tooltip: 'Send message',
-                      onPressed: _busy || _listening || _mediaBusy
-                          ? null
-                          : () => _run(_send),
-                      icon: const Icon(Icons.send),
-                    ),
-                  ],
-                ),
               ),
             ),
           ],
         ),
+        actions: [
+          IconButton(
+            tooltip: 'New conversation',
+            onPressed: _busy
+                ? null
+                : () => setState(() {
+                    _conversation = null;
+                    _messages = [];
+                    _proposals = [];
+                    _hasOlder = false;
+                  }),
+            icon: const Icon(Icons.add_comment_outlined),
+          ),
+        ],
       ),
-    ),
-  );
-}
-
-class _SahurAvatar extends StatelessWidget {
-  const _SahurAvatar({required this.size});
-  final double size;
-  @override
-  Widget build(BuildContext context) => Container(
-    width: size,
-    height: size,
-    decoration: BoxDecoration(
-      shape: BoxShape.circle,
-      color: Theme.of(context).colorScheme.primaryContainer,
-      border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-    ),
-    child: ClipOval(
-      child: Image.asset(
-        sahurMascotAsset,
-        fit: BoxFit.cover,
-        alignment: const Alignment(0, -0.75),
-        cacheWidth: 128,
-        semanticLabel: 'Tung Tung Sahur',
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 900),
+          child: Column(
+            children: [
+              if (_supportsCalendar)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                    child: TextButton.icon(
+                      icon: Icon(
+                        _calendarConnected
+                            ? Icons.event_available
+                            : Icons.calendar_month,
+                        size: 18,
+                      ),
+                      label: Text(
+                        _calendarConnected
+                            ? 'Calendar connected'
+                            : 'Connect Google Calendar',
+                      ),
+                      onPressed: _busy ? null : () => _run(_calendarSettings),
+                    ),
+                  ),
+                ),
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        key: ValueKey(_conversation),
+                        initialValue:
+                            _conversations.any((c) => c['id'] == _conversation)
+                            ? _conversation
+                            : null,
+                        decoration: const InputDecoration(
+                          labelText: 'Conversations',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: _conversations
+                            .map(
+                              (c) => DropdownMenuItem(
+                                value: c['id'] as String,
+                                child: Text(
+                                  c['title'] as String,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: _busy
+                            ? null
+                            : (id) {
+                                if (id != null) _run(() => _open(id));
+                              },
+                        isExpanded: true,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Refresh history',
+                      onPressed: _busy
+                          ? null
+                          : () => _run(() async {
+                              await _list();
+                              if (_conversation != null) {
+                                await _open(_conversation!);
+                              }
+                            }),
+                      icon: const Icon(Icons.refresh),
+                    ),
+                  ],
+                ),
+              ),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Text(
+                    _error!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
+              if (_busy) ...[
+                const LinearProgressIndicator(),
+                const Padding(
+                  padding: EdgeInsets.all(8),
+                  child: Text(
+                    'Working on your request… local AI can take a few minutes.',
+                  ),
+                ),
+              ],
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    if (_messages.isEmpty)
+                      Column(
+                        children: [
+                          const SizedBox(height: 8),
+                          AssistantRings(
+                            size: 112,
+                            active: _busy || _listening,
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'What can I help you with?',
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.titleLarge
+                                ?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  color: Theme.of(context).colorScheme.primary,
+                                ),
+                          ),
+                          const Padding(
+                            padding: EdgeInsets.symmetric(
+                              vertical: 14,
+                              horizontal: 12,
+                            ),
+                            child: Text(
+                              'Create tasks, update your plans, or choose what to work on next. You approve changes before they are saved.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: Color(0xFFACBCD0)),
+                            ),
+                          ),
+                          Wrap(
+                            alignment: WrapAlignment.center,
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              for (final suggestion in [
+                                'What should I work on today?',
+                                'Help me plan my study time',
+                                'Organize my tasks',
+                              ])
+                                ActionChip(
+                                  label: Text(suggestion),
+                                  avatar: const Icon(
+                                    Icons.auto_awesome,
+                                    size: 16,
+                                  ),
+                                  onPressed: _busy
+                                      ? null
+                                      : () => _input.text = suggestion,
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                      ),
+                    if (_hasOlder)
+                      TextButton(
+                        onPressed: _busy ? null : () => _run(_older),
+                        child: const Text('Load earlier messages'),
+                      ),
+                    ..._messages.map(
+                      (m) => Align(
+                        alignment: m['role'] == 'user'
+                            ? Alignment.centerRight
+                            : Alignment.centerLeft,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 660),
+                          child: Card(
+                            color: m['role'] == 'user'
+                                ? Theme.of(context).colorScheme.primaryContainer
+                                : Theme.of(context)
+                                      .colorScheme
+                                      .surfaceContainerLow,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      if (m['role'] != 'user') ...[
+                                        const AssistantRings(size: 30),
+                                        const SizedBox(width: 8),
+                                      ],
+                                      Text(
+                                        m['role'] == 'user' ? 'You' : 'Halo',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .primary,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  SelectableText(m['content'] as String),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    ..._proposals.map(
+                      (p) => Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Task changes • ${proposalStatus(p['status'])}',
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                              ...(p['operations'] as List).map(
+                                (op) => Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 8,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '${operationLabel(op['name'])}: ${op['preview_title']}',
+                                      ),
+                                      if (op['arguments']['fields'] != null)
+                                        ...(op['arguments']['fields'] as Map)
+                                            .entries
+                                            .map(
+                                              (e) => Text(
+                                                '${fieldLabel(e.key)}: ${e.value.toString().isEmpty ? 'None' : e.value}',
+                                              ),
+                                            ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              if (p['status'] == 'pending')
+                                Wrap(
+                                  spacing: 12,
+                                  children: [
+                                    FilledButton(
+                                      onPressed: _busy
+                                          ? null
+                                          : () => _decide(p, true),
+                                      child: const Text('Review and apply'),
+                                    ),
+                                    TextButton(
+                                      onPressed: _busy
+                                          ? null
+                                          : () => _decide(p, false),
+                                      child: const Text('Cancel proposal'),
+                                    ),
+                                  ],
+                                ),
+                              if (p['result'] != null)
+                                ...((p['result'] as Map)['results'] as List? ??
+                                        [])
+                                    .map(
+                                      (result) => Text(
+                                        result['ok'] == true
+                                            ? '${operationLabel(result['name'])}: done'
+                                            : result['error']?.toString() ?? 'This change could not be applied.',
+                                      ),
+                                    ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (_image != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Image.memory(
+                          _image!,
+                          width: 64,
+                          height: 64,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          _imageText.isEmpty
+                              ? 'Image attached · add a description'
+                              : 'Image attached · text extracted',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Remove image',
+                        onPressed: () => setState(() {
+                          _image = null;
+                          _imageText = '';
+                        }),
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  ),
+                ),
+              if (_imageText.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: ExpansionTile(
+                    title: const Text('Review extracted text'),
+                    tilePadding: EdgeInsets.zero,
+                    children: [
+                      SizedBox(
+                        height: 100,
+                        child: SingleChildScrollView(
+                          child: SelectableText(_imageText),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              if (_listening)
+                const Padding(
+                  padding: EdgeInsets.all(8),
+                  child: Text('Listening… tap the microphone to finish.'),
+                ),
+              SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      if (_supportsMedia) ...[
+                        IconButton(
+                          tooltip: 'Paste image',
+                          onPressed: _busy || _mediaBusy ? null : _pasteImage,
+                          icon: const Icon(Icons.content_paste),
+                        ),
+                        IconButton(
+                          tooltip: _listening
+                              ? 'Finish recording'
+                              : 'Dictate message',
+                          onPressed: _busy ? null : _toggleMicrophone,
+                          icon: Icon(
+                            _listening ? Icons.stop_circle : Icons.mic_none,
+                          ),
+                          color: _listening
+                              ? Theme.of(context).colorScheme.error
+                              : null,
+                        ),
+                      ],
+                      Expanded(
+                        child: CallbackShortcuts(
+                          bindings: {
+                            if (_supportsMedia)
+                              SingleActivator(
+                                LogicalKeyboardKey.keyV,
+                                meta:
+                                    defaultTargetPlatform ==
+                                    TargetPlatform.macOS,
+                                control:
+                                    defaultTargetPlatform ==
+                                    TargetPlatform.windows,
+                              ): () async {
+                                final hasImage = await _media
+                                    .hasClipboardImage();
+                                if (hasImage) {
+                                  await _pasteImage();
+                                } else {
+                                  final text = await Clipboard.getData(
+                                    Clipboard.kTextPlain,
+                                  );
+                                  if (mounted && text?.text != null) {
+                                    final selection = _input.selection;
+                                    final start = selection.isValid
+                                        ? selection.start
+                                        : _input.text.length;
+                                    final end = selection.isValid
+                                        ? selection.end
+                                        : start;
+                                    _input.value = TextEditingValue(
+                                      text: _input.text.replaceRange(
+                                        start,
+                                        end,
+                                        text!.text!,
+                                      ),
+                                      selection: TextSelection.collapsed(
+                                        offset: start + text.text!.length,
+                                      ),
+                                    );
+                                  }
+                                }
+                              },
+                          },
+                          child: TextField(
+                            controller: _input,
+                            minLines: 1,
+                            maxLines: 5,
+                            maxLength: 4000,
+                            decoration: const InputDecoration(
+                              hintText: 'Ask Halo…',
+                              border: OutlineInputBorder(),
+                            ),
+                            onSubmitted: (_) {
+                              if (!_listening && !_mediaBusy) _run(_send);
+                            },
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton.filled(
+                        tooltip: 'Send message',
+                        onPressed: _busy || _listening || _mediaBusy
+                            ? null
+                            : () => _run(_send),
+                        icon: const Icon(Icons.send),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
