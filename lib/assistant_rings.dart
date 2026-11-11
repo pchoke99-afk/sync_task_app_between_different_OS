@@ -2,18 +2,20 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-/// Shared vector artwork; only active requests need an animation ticker.
+/// Shared vector artwork with optional ambient motion for the corner launcher.
 class AssistantRings extends StatefulWidget {
   const AssistantRings({
     super.key,
     this.size = 64,
     this.active = false,
     this.animateOnHover = false,
+    this.animateWhenIdle = false,
   });
 
   final double size;
   final bool active;
   final bool animateOnHover;
+  final bool animateWhenIdle;
 
   @override
   State<AssistantRings> createState() => _AssistantRingsState();
@@ -29,9 +31,17 @@ class _AssistantRingsState extends State<AssistantRings>
   bool _hovered = false;
 
   void _updateMotion() {
-    if ((widget.active || (widget.animateOnHover && _hovered)) &&
+    if ((widget.active ||
+            widget.animateWhenIdle ||
+            (widget.animateOnHover && _hovered)) &&
         !MediaQuery.disableAnimationsOf(context)) {
-      if (!_controller.isAnimating) _controller.repeat();
+      final duration = widget.animateOnHover && _hovered
+          ? const Duration(milliseconds: 1800)
+          : const Duration(seconds: 4);
+      if (!_controller.isAnimating || _controller.duration != duration) {
+        _controller.duration = duration;
+        _controller.repeat();
+      }
     } else {
       _controller.stop();
       _controller.value = 0;

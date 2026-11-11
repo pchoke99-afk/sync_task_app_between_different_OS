@@ -1188,7 +1188,11 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
                       );
                       if (mounted) await _initialize();
                     },
-                    child: const AssistantRings(size: 52, animateOnHover: true),
+                    child: const AssistantRings(
+                      size: 52,
+                      animateOnHover: true,
+                      animateWhenIdle: true,
+                    ),
                   ),
                 ),
               ),

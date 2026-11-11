@@ -425,6 +425,7 @@ footer span {
 .assistant-launcher .rings {
   width: 46px;
   height: 46px;
+  animation: halo-orbit 3.8s ease-in-out infinite alternate;
 }
 .assistant-launcher:hover .rings,
 .assistant-launcher:focus-visible .rings {

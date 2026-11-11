@@ -39,12 +39,16 @@ void main() {
     Future<void> show({
       required bool active,
       bool reducedMotion = false,
+      bool animateWhenIdle = false,
     }) async {
       await tester.pumpWidget(
         MaterialApp(
           home: MediaQuery(
             data: MediaQueryData(disableAnimations: reducedMotion),
-            child: AssistantRings(active: active),
+            child: AssistantRings(
+              active: active,
+              animateWhenIdle: animateWhenIdle,
+            ),
           ),
         ),
       );
@@ -57,6 +61,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.binding.hasScheduledFrame, isFalse);
     await show(active: true, reducedMotion: true);
+    await tester.pumpAndSettle();
+    expect(tester.binding.hasScheduledFrame, isFalse);
+    await show(active: false, animateWhenIdle: true);
+    expect(tester.binding.hasScheduledFrame, isTrue);
+    await show(active: false, animateWhenIdle: true, reducedMotion: true);
     await tester.pumpAndSettle();
     expect(tester.binding.hasScheduledFrame, isFalse);
   });
