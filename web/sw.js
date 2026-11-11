@@ -7,6 +7,7 @@ const SHELL = [
   "/src/tasks.js",
   "/src/calendar.js",
   "/src/browser_session.js",
+  "/apple-touch-icon.png",
   "/icon.svg",
   "/icon-192.png",
   "/icon-512.png",

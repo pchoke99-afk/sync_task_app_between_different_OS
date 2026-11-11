@@ -10,6 +10,7 @@ await mkdir(dest, { recursive: true });
 for (const name of [
   "index.html",
   "styles.css",
+  "apple-touch-icon.png",
   "icon.svg",
   "icon-192.png",
   "icon-512.png",
