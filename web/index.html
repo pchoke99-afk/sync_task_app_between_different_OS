@@ -87,17 +87,27 @@
           <div>
             <p id="today" class="eyebrow"></p>
             <h1>Make space for<br /><span>what matters.</span></h1>
-            <p class="muted">One task at a time. You’ve got this.</p>
           </div>
           <button id="add-task" class="primary">＋ New task</button>
         </section>
-        <section class="progress-card" aria-label="Task progress">
+        <section class="progress-card" aria-label="Daily task goal">
           <div>
-            <span class="eyebrow">YOUR MOMENTUM</span>
+            <span class="eyebrow">DAILY GOAL</span>
             <p id="progress-label"></p>
           </div>
-          <strong id="progress-percent">0%</strong
-          ><progress id="progress" max="100" value="0"></progress>
+          <strong id="progress-percent" aria-hidden="true">0%</strong>
+          <div
+            id="progress"
+            class="goal-track"
+            role="progressbar"
+            aria-label="Daily task goal"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+          >
+            <span></span>
+          </div>
+          <p id="task-remaining" class="muted"></p>
         </section>
         <section class="list-section">
           <div class="list-heading">
@@ -113,10 +123,7 @@
           <div id="tasks" class="tasks"></div>
           <div id="empty" class="empty" hidden>
             <span aria-hidden="true">✧</span>
-            <h3>A little breathing room.</h3>
-            <p class="muted">
-              Add a task or ask your assistant to help you plan.
-            </p>
+            <h3 id="empty-title"></h3>
           </div>
         </section>
         <footer>

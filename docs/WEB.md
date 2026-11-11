@@ -4,6 +4,8 @@ The native iOS target has been retired. `web/` is a standalone HTML, CSS, and Ja
 
 The web app connects to the **same existing PocketBase tasks and Python/Ollama assistant**. No new database or migration is needed. It includes the dark theme, Halo's blue rings, hover animation, task creation/editing/completion/deletion, filters, confetti, offline edits, conversation history, and explicit AI proposal approval.
 
+The daily goal is three completed tasks, resetting at local midnight. Completing more tasks keeps the bar at 100%. Deleting a completed task keeps its daily credit, while reopening it removes that credit. An “All caught up” message shows when there are no open tasks. Today's completion IDs are saved per account on each device or browser. Other devices count completions when they sync the task records. A completion deleted before another device sees it cannot be recovered there. The Mac and Windows apps use the same goal.
+
 ## Build
 
 Use Node.js 22 or later. From the repository root:

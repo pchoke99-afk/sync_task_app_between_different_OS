@@ -10,6 +10,7 @@ import 'assistant.dart';
 import 'assistant_rings.dart';
 import 'app_theme.dart';
 import 'session.dart';
+import 'task_progress.dart';
 
 const pocketBaseUrl = String.fromEnvironment(
   'POCKETBASE_URL',
@@ -142,8 +143,6 @@ class AppTask {
   final String category;
   final String scheduledAt;
 
-  bool get isLocal => id.startsWith('local_');
-
   AppTask copyWith({
     String? id,
     String? title,
@@ -247,7 +246,14 @@ class TaskRepository {
   final Box _pendingBox = Hive.box(pendingChangesBoxName);
   Future<void> _queue = Future<void>.value();
   String get _cacheKey => 'tasks:$userId';
+  String get _progressKey => 'daily-progress:$userId';
   String _key(String id) => '$userId:$id';
+
+  DailyTaskProgress loadProgress() =>
+      DailyTaskProgress(_cacheBox.get(_progressKey));
+
+  Future<void> saveProgress(DailyTaskProgress progress) =>
+      _cacheBox.put(_progressKey, progress.toMap());
 
   void _checkSession() {
     if (userId == null || pb.authStore.record?.id != userId) {
@@ -669,6 +675,9 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
   final _repository = TaskRepository();
 
   late final ConfettiController _confettiController;
+  late final DailyTaskProgress _progress;
+  static const _taskTopic = '$tasksCollection/*';
+  bool _subscribed = false;
 
   List<AppTask> _tasks = [];
   bool _isLoading = true;
@@ -678,6 +687,7 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    _progress = _repository.loadProgress();
     _confettiController = ConfettiController(
       duration: const Duration(milliseconds: 1800),
     );
@@ -700,19 +710,47 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
     try {
       await _repository.syncPendingChanges();
       await _reloadTasks();
-      if (mounted) {
+      if (mounted && !_subscribed) {
         try {
-          await pb
-              .collection(tasksCollection)
-              .subscribe('*', (_) => _reloadTasks());
+          await pb.realtime.subscribe(_taskTopic, _onTaskChange);
+          if (mounted) {
+            _subscribed = true;
+          } else {
+            await _unsubscribeTasks();
+          }
         } catch (_) {
-          /* Timer and resume retry while offline. */
+          // The SDK registers the callback before it connects.
+          await _unsubscribeTasks();
         }
       }
     } catch (_) {
       if (mounted) setState(() => _isLoading = false);
     } finally {
       _syncing = false;
+    }
+  }
+
+  void _onTaskChange(Object? _) {
+    if (mounted) unawaited(_reloadTasks());
+  }
+
+  Future<void> _unsubscribeTasks() => pb.realtime
+      .unsubscribeByTopicAndListener(_taskTopic, _onTaskChange)
+      .catchError((_) {});
+
+  void _rememberCompletions(Iterable<AppTask> tasks) {
+    final changed = _progress.observe(
+      tasks.map(
+        (task) => (
+          id: task.id,
+          completed: task.isCompleted,
+          completedAt: task.completedAt,
+        ),
+      ),
+      DateTime.now(),
+    );
+    if (changed) {
+      unawaited(_repository.saveProgress(_progress).catchError((_) {}));
     }
   }
 
@@ -725,6 +763,7 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
     }
     if (!mounted) return;
 
+    _rememberCompletions(tasks);
     setState(() {
       _tasks = _sortTasks(tasks);
       _isLoading = false;
@@ -735,15 +774,14 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
     final sorted = List<AppTask>.from(tasks);
 
     sorted.sort((a, b) {
+      if (a.isCompleted != b.isCompleted) {
+        return a.isCompleted ? 1 : -1;
+      }
       final priorityCompare = a.priority.sortOrder.compareTo(
         b.priority.sortOrder,
       );
 
       if (priorityCompare != 0) return priorityCompare;
-
-      if (a.isCompleted != b.isCompleted) {
-        return a.isCompleted ? 1 : -1;
-      }
 
       return b.createdAt.compareTo(a.createdAt);
     });
@@ -752,6 +790,7 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
   }
 
   void _replaceTask(AppTask updated) {
+    _rememberCompletions([updated]);
     setState(() {
       final index = _tasks.indexWhere((task) => task.id == updated.id);
 
@@ -1015,7 +1054,7 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
   }
 
   void _startCelebration() {
-    if (!mounted) return;
+    if (!mounted || MediaQuery.disableAnimationsOf(context)) return;
 
     // Restarting the controller makes every completion trigger immediately,
     // even when a previous burst is still finishing.
@@ -1059,21 +1098,19 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
     }
   }
 
-  int get _completedTaskCount =>
-      _tasks.where((task) => task.isCompleted).length;
-
   @override
   void dispose() {
     _syncTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
-    pb.collection(tasksCollection).unsubscribe('*').catchError((_) {});
+    unawaited(_unsubscribeTasks());
     _confettiController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final completed = _completedTaskCount;
+    final completed = _progress.completedOn(DateTime.now());
+    final remaining = _tasks.where((task) => !task.isCompleted).length;
     return Stack(
       children: [
         Scaffold(
@@ -1096,11 +1133,7 @@ class _TaskScreenState extends State<TaskScreen> with WidgetsBindingObserver {
               ? const Center(child: CircularProgressIndicator())
               : Column(
                   children: [
-                    _ProgressHeader(
-                      completed: completed,
-                      total: _tasks.length,
-                      progress: _tasks.isEmpty ? 0 : completed / _tasks.length,
-                    ),
+                    _ProgressHeader(completed: completed, remaining: remaining),
                     const Divider(height: 1),
                     Expanded(
                       child: _tasks.isEmpty
@@ -1209,42 +1242,68 @@ class _TaskFormResult {
 }
 
 class _ProgressHeader extends StatelessWidget {
-  const _ProgressHeader({
-    required this.completed,
-    required this.total,
-    required this.progress,
-  });
+  const _ProgressHeader({required this.completed, required this.remaining});
 
   final int completed;
-  final int total;
-  final double progress;
+  final int remaining;
 
   @override
   Widget build(BuildContext context) {
+    const goal = DailyTaskProgress.goal;
+    final progress = min(completed / goal, 1.0);
+    final goalMet = completed >= goal;
+    final theme = Theme.of(context);
+    final color = goalMet ? const Color(0xFF94EFCD) : theme.colorScheme.primary;
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            '$completed of $total tasks completed',
-            style: Theme.of(context).textTheme.titleMedium,
+          Row(
+            children: [
+              Expanded(
+                child: Semantics(
+                  liveRegion: true,
+                  child: Text(
+                    goalMet
+                        ? 'Goal reached · $completed done today'
+                        : '$completed of $goal tasks done today',
+                    style: theme.textTheme.titleMedium?.copyWith(color: color),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Text(
+                '${(progress * 100).round()}%',
+                style: theme.textTheme.headlineSmall?.copyWith(color: color),
+              ),
+            ],
           ),
           const SizedBox(height: 10),
           ClipRRect(
             borderRadius: BorderRadius.circular(12),
             child: TweenAnimationBuilder<double>(
               tween: Tween(begin: 0, end: progress),
-              duration: const Duration(milliseconds: 400),
+              duration: MediaQuery.disableAnimationsOf(context)
+                  ? Duration.zero
+                  : const Duration(milliseconds: 320),
               builder: (context, value, _) {
-                return LinearProgressIndicator(value: value, minHeight: 14);
+                return LinearProgressIndicator(
+                  value: value,
+                  minHeight: 10,
+                  color: color,
+                  semanticsLabel: 'Daily task goal',
+                  semanticsValue: '$completed done today, goal $goal',
+                );
               },
             ),
           ),
           const SizedBox(height: 8),
           Text(
-            '${(progress * 100).round()}%',
-            style: Theme.of(context).textTheme.bodyMedium,
+            remaining == 0
+                ? 'All caught up'
+                : '$remaining ${remaining == 1 ? 'task' : 'tasks'} left to do',
+            style: theme.textTheme.bodyMedium,
           ),
         ],
       ),

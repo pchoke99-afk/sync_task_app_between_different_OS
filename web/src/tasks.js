@@ -1,5 +1,5 @@
 const priorities = { high: 0, normal: 1, low: 2 };
-export const taskFields = [
+const taskFields = [
   "title",
   "description",
   "priority",
@@ -14,14 +14,18 @@ export function newRecordId(cryptoProvider = globalThis.crypto) {
     .join("");
 }
 
-export function sortTasks(tasks) {
-  return [...tasks].sort(
+function sortTasks(tasks) {
+  return tasks.sort(
     (a, b) =>
       Number(a.is_completed) - Number(b.is_completed) ||
       (priorities[a.priority] ?? 1) - (priorities[b.priority] ?? 1) ||
       String(b.created ?? "").localeCompare(String(a.created ?? "")),
   );
 }
+
+const dailyGoal = 3;
+const localDay = (date) =>
+  `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
 
 function changedFieldsMatch(record, fields) {
   return Object.entries(fields).every(([key, value]) => record[key] === value);
@@ -38,7 +42,8 @@ export class TaskStore {
     this.queue = [];
     this.tasks = [];
     this.running = null;
-    this.storageError = false;
+    this.completionDay = "";
+    this.completions = new Set();
     try {
       const saved = JSON.parse(storage.getItem(this.key) || "{}");
       this.tasks = Array.isArray(saved.tasks)
@@ -47,20 +52,53 @@ export class TaskStore {
       this.queue = Array.isArray(saved.queue)
         ? saved.queue.filter((op) => op.user === user)
         : [];
+      this.completionDay = saved.completionDay ?? "";
+      if (Array.isArray(saved.completions))
+        this.completions = new Set(saved.completions);
     } catch {
-      this.storageError = true;
+      // Missing or corrupt browser storage starts with an empty offline cache.
     }
+    this.observeCompletions(this.tasks);
+  }
+
+  observeCompletions(tasks, now = new Date()) {
+    const day = localDay(now);
+    if (this.completionDay !== day) {
+      this.completionDay = day;
+      this.completions.clear();
+    }
+    for (const task of tasks) {
+      if (
+        task.is_completed &&
+        localDay(new Date(task.completed_at?.replace(" ", "T"))) === day
+      ) {
+        this.completions.add(task.id);
+      } else {
+        this.completions.delete(task.id);
+      }
+    }
+  }
+
+  dailyProgress(now = new Date()) {
+    return {
+      completed:
+        this.completionDay === localDay(now) ? this.completions.size : 0,
+      goal: dailyGoal,
+    };
   }
 
   persist() {
     try {
       this.storage.setItem(
         this.key,
-        JSON.stringify({ tasks: this.tasks, queue: this.queue }),
+        JSON.stringify({
+          tasks: this.tasks,
+          queue: this.queue,
+          completionDay: this.completionDay,
+          completions: [...this.completions],
+        }),
       );
-      this.storageError = false;
     } catch {
-      this.storageError = true;
       throw new Error(
         "Browser storage is full or unavailable. Leave this page open until your edits have synced.",
       );
@@ -86,7 +124,8 @@ export class TaskStore {
 
   edit(id, fields, method = "PATCH") {
     if (!/^[a-z0-9]{15}$/.test(id)) throw new Error("Invalid task ID.");
-    const existing = this.tasks.find((t) => t.id === id);
+    const index = this.tasks.findIndex((t) => t.id === id);
+    const existing = this.tasks[index];
     if (method !== "POST" && !existing)
       throw new Error("Task is no longer available. Sync and try again.");
     const safe = Object.fromEntries(
@@ -101,7 +140,26 @@ export class TaskStore {
       fields: safe,
       baseUpdated: existing?.updated ?? null,
     });
-    this.tasks = this.overlay(this.tasks);
+    if (method === "DELETE") {
+      this.tasks.splice(index, 1);
+    } else {
+      const task = { ...existing, ...safe, id, user: this.user };
+      if (index === -1) this.tasks.push(task);
+      else this.tasks[index] = task;
+      sortTasks(this.tasks);
+      this.observeCompletions([task]);
+    }
+    this.persist();
+  }
+
+  discardEdits() {
+    if (this.running)
+      throw new Error("Wait for sync to finish before discarding edits.");
+    for (const op of this.queue) {
+      if ("is_completed" in op.fields) this.completions.delete(op.id);
+    }
+    this.queue = [];
+    this.tasks = [];
     this.persist();
   }
 
@@ -133,10 +191,7 @@ export class TaskStore {
             method: "POST",
             body: { ...op.fields, id: op.id, user: this.user },
           });
-        } else if (
-          current.user !== this.user ||
-          !changedFieldsMatch(current, op.fields)
-        ) {
+        } else if (!changedFieldsMatch(current, op.fields)) {
           throw new Error(
             "A queued task conflicts with the server. Your offline copy is preserved.",
           );
@@ -187,6 +242,7 @@ export class TaskStore {
       records.push(...result.items);
     } while (page <= result.totalPages);
     this.tasks = this.overlay(records);
+    this.observeCompletions(this.tasks);
     this.persist();
     return this.tasks;
   }

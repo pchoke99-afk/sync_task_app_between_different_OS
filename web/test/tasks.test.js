@@ -54,6 +54,104 @@ function server(records = [initial]) {
   return { rows, calls, api };
 }
 
+test("Daily credit survives completion deletion, remote cleanup, reload, and new tasks", async () => {
+  const db = server(),
+    local = storage();
+  const store = new TaskStore(user, db.api, local);
+  await store.sync();
+  store.edit(id, {
+    is_completed: true,
+    completed_at: new Date().toISOString(),
+  });
+  await store.sync();
+  db.rows.clear();
+  await store.sync();
+  assert.deepEqual(store.dailyProgress(), { completed: 1, goal: 3 });
+  const restored = new TaskStore(user, db.api, local);
+  restored.edit(
+    "ccccccccccccccc",
+    { title: "Next task", is_completed: false },
+    "POST",
+  );
+  assert.equal(restored.dailyProgress().completed, 1);
+  restored.edit(
+    "ddddddddddddddd",
+    {
+      title: "Second win",
+      is_completed: true,
+      completed_at: new Date().toISOString(),
+    },
+    "POST",
+  );
+  restored.edit("ddddddddddddddd", {}, "DELETE");
+  assert.equal(restored.dailyProgress().completed, 2);
+  await restored.sync();
+  assert.equal(new TaskStore(user, db.api, local).dailyProgress().completed, 2);
+  assert.equal(
+    new TaskStore("eeeeeeeeeeeeeee", db.api, local).dailyProgress().completed,
+    0,
+  );
+});
+
+test("Reopening removes credit, repeated sync cannot duplicate it, and old dates do not count", async () => {
+  const db = server(),
+    store = new TaskStore(user, db.api, storage());
+  await store.sync();
+  const completion = {
+    is_completed: true,
+    completed_at: new Date().toISOString(),
+  };
+  store.edit(id, completion);
+  await store.sync();
+  await store.sync();
+  assert.equal(store.dailyProgress().completed, 1);
+  store.edit(id, { is_completed: false, completed_at: "" });
+  assert.equal(store.dailyProgress().completed, 0);
+  store.edit(id, completion);
+  assert.equal(store.dailyProgress().completed, 1);
+  store.edit(id, { is_completed: true, completed_at: "2020-01-01T12:00:00Z" });
+  assert.equal(store.dailyProgress().completed, 0);
+});
+
+test("Daily progress rolls over at local midnight and excludes malformed and future dates", () => {
+  const store = new TaskStore(user, server().api, storage());
+  const before = new Date(2026, 10, 10, 23, 59);
+  const next = new Date(2026, 10, 11, 0, 1);
+  store.observeCompletions(
+    [{ id, is_completed: true, completed_at: before.toISOString() }],
+    before,
+  );
+  assert.equal(store.dailyProgress(before).completed, 1);
+  assert.equal(store.dailyProgress(next).completed, 0);
+  store.observeCompletions(
+    [
+      { id, is_completed: true, completed_at: before.toISOString() },
+      { id: "bad", is_completed: true, completed_at: "invalid" },
+      {
+        id: "future",
+        is_completed: true,
+        completed_at: "2028-01-01T12:00:00Z",
+      },
+    ],
+    next,
+  );
+  assert.equal(store.dailyProgress(next).completed, 0);
+});
+
+test("Discarding an offline completion removes provisional daily credit", async () => {
+  const db = server(),
+    store = new TaskStore(user, db.api, storage());
+  await store.sync();
+  store.edit(id, {
+    is_completed: true,
+    completed_at: new Date().toISOString(),
+  });
+  assert.equal(store.dailyProgress().completed, 1);
+  store.discardEdits();
+  await store.sync();
+  assert.equal(store.dailyProgress().completed, 0);
+});
+
 test("An ambiguous create response retries the same ID without duplicating tasks", async () => {
   const db = server([]),
     local = storage();

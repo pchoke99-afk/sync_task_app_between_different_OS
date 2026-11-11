@@ -34,6 +34,7 @@ const requestControllers = new Set();
 let toastTimer;
 let imageGeneration = 0;
 let sessionRefresh = null;
+let renderedTasks = "";
 
 function toast(message) {
   $("#toast").textContent = message;
@@ -102,6 +103,7 @@ function logout() {
   $("#message").value = "";
   $("#messages").replaceChildren();
   $("#tasks").replaceChildren();
+  renderedTasks = "";
   browserSession.clear(signedOutUser);
   $("#remember-me").checked = false;
   document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
@@ -196,13 +198,6 @@ function enterApp(session, remember = browserSession.remember) {
   });
   $("#login-view").hidden = true;
   $("#task-view").hidden = false;
-  $("#today").textContent = new Intl.DateTimeFormat(undefined, {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  })
-    .format(new Date())
-    .toUpperCase();
   renderTasks();
   syncTasks();
   const clientId = readClientId();
@@ -226,6 +221,7 @@ async function refreshSession() {
 }
 async function syncTasks() {
   if (!state.store || state.syncing || !navigator.onLine) {
+    renderProgress();
     renderSync();
     return;
   }
@@ -243,6 +239,7 @@ async function syncTasks() {
   } finally {
     if (state.store === store) {
       state.syncing = false;
+      renderProgress();
       renderSync();
     }
   }
@@ -260,27 +257,69 @@ function renderSync() {
   status.classList.toggle("offline", !navigator.onLine || pending > 0);
   $("#sync").disabled = state.syncing;
 }
+function renderProgress() {
+  if (!state.store) return;
+  const { completed, goal } = state.store.dailyProgress();
+  $("#today").textContent = new Intl.DateTimeFormat(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  })
+    .format(new Date())
+    .toUpperCase();
+  const percent = Math.round(Math.min(completed / goal, 1) * 100);
+  const remaining = state.store.tasks.reduce(
+    (count, task) => count + Number(!task.is_completed),
+    0,
+  );
+  const bar = $("#progress");
+  bar.setAttribute("aria-valuenow", String(percent));
+  bar.setAttribute("aria-valuetext", `${completed} done today, goal ${goal}`);
+  bar.style.setProperty("--goal-progress", `${percent}%`);
+  $(".progress-card").classList.toggle("goal-met", completed >= goal);
+  $("#progress-percent").textContent = `${percent}%`;
+  $("#progress-label").textContent =
+    completed >= goal
+      ? `Goal reached · ${completed} done today`
+      : `${completed} of ${goal} tasks done today`;
+  $("#task-remaining").textContent = remaining
+    ? `${remaining} ${remaining === 1 ? "task" : "tasks"} left to do`
+    : "All caught up";
+}
+
 function renderTasks() {
   if (!state.store) return;
-  const tasks = state.store.tasks;
-  const complete = tasks.filter((task) => task.is_completed).length;
-  const progress = tasks.length
-    ? Math.round((complete / tasks.length) * 100)
-    : 0;
-  $("#progress-label").textContent =
-    `${complete} of ${tasks.length} tasks completed`;
-  $("#progress-percent").textContent = `${progress}%`;
-  $("#progress").value = progress;
+  const { tasks } = state.store;
+  renderProgress();
+  renderSync();
   $("#task-count").textContent = String(tasks.length);
   const visible = tasks.filter(
     (task) =>
       state.filter === "all" ||
       (state.filter === "done") === Boolean(task.is_completed),
   );
+  $("#empty").hidden = visible.length > 0;
+  $("#empty-title").textContent =
+    state.filter === "done"
+      ? "No completed tasks in the list"
+      : state.filter === "active"
+        ? "All caught up"
+        : "No tasks yet";
+  // Polling often returns the same rows. Keep their DOM and keyboard focus.
+  const snapshot = JSON.stringify(visible);
+  if (snapshot === renderedTasks) return;
+  renderedTasks = snapshot;
   const list = $("#tasks");
-  list.replaceChildren();
+  const focused = list.contains(document.activeElement)
+    ? document.activeElement
+    : null;
+  const focusedId = focused?.closest("[data-task-id]")?.dataset.taskId;
+  const focusedControl = focused?.dataset.control;
+  const rows = document.createDocumentFragment();
+  let nextFocus;
   for (const task of visible) {
     const row = element("article", `task${task.is_completed ? " done" : ""}`);
+    row.dataset.taskId = task.id;
     const checkbox = element("input", "task-check");
     checkbox.type = "checkbox";
     checkbox.checked = task.is_completed;
@@ -290,15 +329,33 @@ function renderTasks() {
     );
     checkbox.addEventListener("change", () => {
       const completed = checkbox.checked;
+      const position = checkbox.getBoundingClientRect();
+      const before = state.store.dailyProgress();
       try {
         state.store.edit(task.id, {
           is_completed: completed,
           completed_at: completed ? new Date().toISOString() : "",
         });
-        if (completed) confetti();
         renderTasks();
+        if (completed) {
+          const after = state.store.dailyProgress();
+          const reachedGoal =
+            before.completed < after.goal && after.completed >= after.goal;
+          const caughtUp = state.store.tasks.every((item) => item.is_completed);
+          confetti(position, reachedGoal || caughtUp);
+          toast(
+            reachedGoal
+              ? "Daily goal reached!"
+              : caughtUp
+                ? "All caught up!"
+                : "Task complete",
+          );
+        }
         syncTasks();
       } catch (error) {
+        checkbox.checked = Boolean(
+          state.store?.tasks.find((item) => item.id === task.id)?.is_completed,
+        );
         errorAt("#task-error", error);
         renderTasks();
       }
@@ -349,9 +406,11 @@ function renderTasks() {
     const remove = button(
       "×",
       async () => {
+        const store = state.store;
         if (!(await confirmAction("Delete this task?", task.title))) return;
+        if (state.store !== store) return;
         try {
-          state.store.edit(task.id, {}, "DELETE");
+          store.edit(task.id, {}, "DELETE");
           renderTasks();
           syncTasks();
         } catch (error) {
@@ -363,10 +422,19 @@ function renderTasks() {
     remove.setAttribute("aria-label", `Delete ${task.title}`);
     actions.append(edit, remove);
     row.append(checkbox, content, actions);
-    list.append(row);
+    checkbox.dataset.control = "complete";
+    edit.dataset.control = "edit";
+    remove.dataset.control = "delete";
+    if (task.id === focusedId) {
+      nextFocus = [checkbox, edit, remove].find(
+        (control) => control.dataset.control === focusedControl,
+      );
+    }
+    rows.append(row);
   }
-  $("#empty").hidden = visible.length > 0;
-  renderSync();
+  list.replaceChildren(rows);
+  if (focused)
+    (nextFocus ?? $(".filters .selected")).focus({ preventScroll: true });
 }
 function editTask(task) {
   $("#task-dialog-title").textContent = task ? "Edit task" : "A new beginning";
@@ -658,11 +726,12 @@ function openSettings() {
 
 // One short, bounded animation; no GIF decoding or idle animation loop.
 let confettiFrame;
-function confetti() {
+function confetti(position, milestone) {
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   cancelAnimationFrame(confettiFrame);
   const canvas = $("#confetti"),
     ctx = canvas.getContext("2d");
+  if (!ctx) return;
   const width = innerWidth,
     height = innerHeight,
     ratio = Math.min(devicePixelRatio, 2);
@@ -670,22 +739,23 @@ function confetti() {
   canvas.height = height * ratio;
   ctx.scale(ratio, ratio);
   const colors = ["#8ec9ff", "#72dce9", "#b7d2ff", "#ecce93"];
-  const particles = Array.from({ length: 70 }, () => ({
-    x: width / 2,
-    y: height * 0.4,
+  const particles = Array.from({ length: milestone ? 64 : 22 }, () => ({
+    x: milestone ? width / 2 : position.left + position.width / 2,
+    y: milestone ? height * 0.4 : position.top + position.height / 2,
     vx: (Math.random() - 0.5) * 11,
     vy: -Math.random() * 9 - 2,
     r: Math.random() * Math.PI,
     color: colors[Math.floor(Math.random() * colors.length)],
   }));
   const start = performance.now();
+  const duration = milestone ? 1500 : 750;
   let last = start;
   const draw = (now) => {
     ctx.clearRect(0, 0, width, height);
-    if (now - start > 1800) return;
+    if (now - start > duration) return;
     const step = Math.min((now - last) / 16.67, 3);
     last = now;
-    ctx.globalAlpha = Math.max(0, 1 - (now - start) / 1800);
+    ctx.globalAlpha = 1 - (now - start) / duration;
     for (const p of particles) {
       p.vy += 0.16 * step;
       p.x += p.vx * step;
@@ -1029,6 +1099,7 @@ $("#discard-edits").addEventListener("click", async () => {
     toast("No queued edits to discard.");
     return;
   }
+  const store = state.store;
   if (
     !(await confirmAction(
       "Discard unsynced edits?",
@@ -1036,12 +1107,12 @@ $("#discard-edits").addEventListener("click", async () => {
     ))
   )
     return;
-  state.store.queue = [];
-  state.store.tasks = [];
+  if (state.store !== store) return;
   try {
-    state.store.persist();
+    store.discardEdits();
   } catch (error) {
     toast(error.message);
+    if (store.running) return;
   }
   $("#settings-dialog").close();
   renderTasks();
