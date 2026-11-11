@@ -8,7 +8,6 @@ const dest = path.join(root, "dist");
 await rm(dest, { recursive: true, force: true });
 await mkdir(dest, { recursive: true });
 for (const name of [
-  "index.html",
   "styles.css",
   "apple-touch-icon.png",
   "icon.svg",
@@ -19,6 +18,21 @@ for (const name of [
 ]) {
   await cp(path.join(root, name), path.join(dest, name), { recursive: true });
 }
+// iOS 27.2's Home Screen sheet can fail to fetch an otherwise valid icon URL.
+// Keep the PNG as the source of truth and embed it for that separate loader.
+const icon = await readFile(path.join(root, "apple-touch-icon.png"));
+const html = await readFile(path.join(root, "index.html"), "utf8");
+const iconHref = 'href="/apple-touch-icon.png"';
+if (!html.includes(iconHref)) {
+  throw new Error("The Apple Home Screen icon link is missing.");
+}
+await writeFile(
+  path.join(dest, "index.html"),
+  html.replace(
+    iconHref,
+    `href="data:image/png;base64,${icon.toString("base64")}"`,
+  ),
+);
 await mkdir(path.join(dest, "vendor/core"), { recursive: true });
 await mkdir(path.join(dest, "vendor/lang"), { recursive: true });
 for (const name of ["tesseract.min.js", "worker.min.js"]) {
